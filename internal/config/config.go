@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -10,6 +11,7 @@ import (
 type Config struct {
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Telegram TelegramConfig `yaml:"telegram"`
+	WhatsApp WhatsAppConfig `yaml:"whatsapp"`
 	Router   RouterConfig   `yaml:"router"`
 }
 
@@ -31,6 +33,17 @@ type TelegramConfig struct {
 	TokenEnv       string  `yaml:"token_env"`
 	AllowedUserIDs []int64 `yaml:"allowed_user_ids"`
 	Token          string  `yaml:"-"`
+}
+
+type WhatsAppConfig struct {
+	// Enabled turns the WhatsApp (whatsmeow linked-device) bridge on.
+	Enabled bool `yaml:"enabled"`
+	// StorePath is the SQLite file holding the paired session. Defaults to
+	// ~/.local/share/assistant/whatsapp.db.
+	StorePath string `yaml:"store_path"`
+	// AllowedJIDs lists the bare phone numbers (sender "user" part, e.g.
+	// "34123456789") permitted to drive the assistant.
+	AllowedJIDs []string `yaml:"allowed_jids"`
 }
 
 type RouterConfig struct {
@@ -73,6 +86,10 @@ func (c *Config) applyDefaults() {
 	if c.Claude.PtyRows == 0 {
 		c.Claude.PtyRows = 500
 	}
+	if c.WhatsApp.Enabled && c.WhatsApp.StorePath == "" {
+		home, _ := os.UserHomeDir()
+		c.WhatsApp.StorePath = filepath.Join(home, ".local", "share", "assistant", "whatsapp.db")
+	}
 	if c.Router.InboundBuffer == 0 {
 		c.Router.InboundBuffer = 32
 	}
@@ -109,6 +126,14 @@ func (c *Config) validate() error {
 	}
 	if len(c.Telegram.AllowedUserIDs) == 0 {
 		return fmt.Errorf("telegram.allowed_user_ids must list at least one user id")
+	}
+	if c.WhatsApp.Enabled {
+		if !c.Telegram.Enabled() {
+			return fmt.Errorf("whatsapp requires telegram (QR pairing is delivered via Telegram)")
+		}
+		if len(c.WhatsApp.AllowedJIDs) == 0 {
+			return fmt.Errorf("whatsapp.allowed_jids must list at least one phone number")
+		}
 	}
 	return nil
 }

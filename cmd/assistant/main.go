@@ -56,13 +56,31 @@ func run(configPath string, logger *slog.Logger) error {
 
 	var wg sync.WaitGroup
 
+	var tg *bridge.Telegram
 	if cfg.Telegram.Enabled() {
-		tg := bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound)
+		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if err := tg.Run(ctx); err != nil {
 				logger.Error("telegram exited", "err", err)
+				cancel()
+			}
+		}()
+	}
+
+	if cfg.WhatsApp.Enabled {
+		// Deliver the WhatsApp pairing QR through Telegram as a PNG.
+		var sink bridge.QRSink
+		if tg != nil {
+			sink = tg.SendPhotoToOwner
+		}
+		wa := bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := wa.Run(ctx); err != nil {
+				logger.Error("whatsapp exited", "err", err)
 				cancel()
 			}
 		}()

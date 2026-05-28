@@ -21,6 +21,17 @@ telegram:
   allowed_user_ids:
     - 123456789
 
+whatsapp:
+  # Optional second surface via whatsmeow (linked device). The pairing QR is
+  # delivered to you through Telegram as a PNG, so Telegram must be enabled too.
+  enabled: false
+  # SQLite session store; persists the pairing. Empty = ~/.local/share/assistant/whatsapp.db
+  store_path: ""
+  # Bare phone numbers (sender "user" part) allowed to drive the assistant —
+  # no leading + and no spaces.
+  allowed_jids:
+    - "34123456789"
+
 router:
   inbound_buffer: 32
   ready_idle_ms: 150

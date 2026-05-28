@@ -1,6 +1,7 @@
 package bridge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ type Telegram struct {
 
 	bot     *bot.Bot
 	allowed map[int64]struct{}
+	ready   chan struct{} // closed once bot is set, so QRSink can wait for startup
 
 	// Pending AskUserQuestion waiters, keyed by a per-question token embedded in
 	// inline-button callback data.
@@ -53,7 +55,7 @@ func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inb
 	for _, id := range cfg.AllowedUserIDs {
 		allow[id] = struct{}{}
 	}
-	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, waiters: map[string]*tgWaiter{}}
+	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
 }
 
 func (t *Telegram) Run(ctx context.Context) error {
@@ -62,6 +64,7 @@ func (t *Telegram) Run(ctx context.Context) error {
 		return fmt.Errorf("telegram bot: %w", err)
 	}
 	t.bot = b
+	close(t.ready)
 	t.log.Info("telegram bridge starting")
 	b.Start(ctx)
 	return nil
@@ -154,6 +157,28 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 		}
 	}
 	return nil
+}
+
+// SendPhotoToOwner sends a photo (e.g. a WhatsApp pairing QR) to the first
+// allowed user. Serves as a QRSink for the WhatsApp bridge. Waits briefly for
+// the bot to finish starting if called early.
+func (t *Telegram) SendPhotoToOwner(ctx context.Context, png []byte, caption string) error {
+	select {
+	case <-t.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("telegram bot not ready")
+	}
+	if len(t.cfg.AllowedUserIDs) == 0 {
+		return fmt.Errorf("no allowed telegram users to send QR to")
+	}
+	_, err := t.bot.SendPhoto(ctx, &bot.SendPhotoParams{
+		ChatID:  t.cfg.AllowedUserIDs[0],
+		Photo:   &models.InputFileUpload{Filename: "whatsapp-qr.png", Data: bytes.NewReader(png)},
+		Caption: caption,
+	})
+	return err
 }
 
 // AskChoices presents each question via a Telegram inline keyboard and blocks
