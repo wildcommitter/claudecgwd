@@ -38,6 +38,10 @@ const (
 	// Phase 1 of waitForResponse waits up to this long to observe the busy
 	// state appearing. If Claude responds instantly we accept that.
 	phase1Timeout = 5 * time.Second
+	// After the TUI returns to ready, how long to poll the session transcript
+	// for the assistant's reply to be flushed to disk before giving up and
+	// falling back to the screen scrape.
+	transcriptFlushWait = 3 * time.Second
 )
 
 // Driver owns a single long-lived `claude` PTY session.
@@ -48,6 +52,10 @@ type Driver struct {
 	cmd     *exec.Cmd
 	ptyFile *os.File
 	term    vt10x.Terminal
+
+	// transcript reads the authoritative reply text from Claude Code's session
+	// JSONL, sidestepping the lossy TUI screen-scrape.
+	transcript *transcriptReader
 
 	// sendMu serializes Send calls so only one prompt is in flight.
 	sendMu sync.Mutex
@@ -64,7 +72,12 @@ func New(cfg config.ClaudeConfig, log *slog.Logger) *Driver {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Driver{cfg: cfg, log: log, done: make(chan struct{})}
+	return &Driver{
+		cfg:        cfg,
+		log:        log,
+		done:       make(chan struct{}),
+		transcript: newTranscriptReader(cfg.SessionID, cfg.Workdir),
+	}
 }
 
 // Start spawns the claude binary under a PTY and waits for the first
@@ -131,6 +144,9 @@ func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
 
 	beforeScreen := d.snapshotScreen()
 	d.dumpScreen("before", beforeScreen)
+	// Watermark the transcript before sending so we can read back exactly the
+	// lines this turn appends.
+	transcriptOffset := d.transcript.offset()
 
 	if err := d.writePrompt(prompt); err != nil {
 		return "", err
@@ -147,6 +163,16 @@ func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
 		return "", fmt.Errorf("waiting for response: %w", err)
 	}
 
+	// Primary path: read the full reply from the session transcript. This is
+	// the authoritative text and is immune to the TUI scroll/scrape truncation
+	// that the screen snapshot suffers from.
+	if reply, ok := d.transcript.waitForReplySince(transcriptOffset, transcriptFlushWait); ok {
+		return reply, nil
+	}
+	d.log.Warn("transcript reply unavailable; falling back to screen scrape",
+		"transcript", d.transcript.describe())
+
+	// Fallback: scrape the screen (lossy for long/scrolled replies).
 	afterScreen := d.snapshotScreen()
 	d.dumpScreen("after", afterScreen)
 	return extractResponse(beforeScreen, afterScreen, prompt), nil
