@@ -159,6 +159,30 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 	return nil
 }
 
+// SendTextToOwner pushes a proactive text message to the first allowed user.
+// Serves as a Pusher for the Notifier. Waits briefly for startup.
+func (t *Telegram) SendTextToOwner(ctx context.Context, text string) error {
+	select {
+	case <-t.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("telegram bot not ready")
+	}
+	if len(t.cfg.AllowedUserIDs) == 0 {
+		return fmt.Errorf("no allowed telegram users")
+	}
+	for _, chunk := range chunkText(text, tgMaxChars) {
+		if _, err := t.bot.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID: t.cfg.AllowedUserIDs[0],
+			Text:   chunk,
+		}); err != nil {
+			return fmt.Errorf("telegram notify: %w", err)
+		}
+	}
+	return nil
+}
+
 // SendQRToOwner sends a QR image (e.g. a WhatsApp pairing code) to the first
 // allowed user as an uncompressed DOCUMENT. Telegram recompresses photos, which
 // blurs a dense QR enough that camera scanners fail — a document is delivered

@@ -69,13 +69,14 @@ func run(configPath string, logger *slog.Logger) error {
 		}()
 	}
 
+	var wa *bridge.WhatsApp
 	if cfg.WhatsApp.Enabled {
 		// Deliver the WhatsApp pairing QR through Telegram as a PNG.
 		var sink bridge.QRSink
 		if tg != nil {
 			sink = tg.SendQRToOwner
 		}
-		wa := bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink)
+		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -83,6 +84,25 @@ func run(configPath string, logger *slog.Logger) error {
 				logger.Error("whatsapp exited", "err", err)
 				cancel()
 			}
+		}()
+	}
+
+	// Proactive-notify path: anything written to the notify FIFO is fanned out
+	// to every configured surface (so a watcher finishing can ping the user
+	// even with no inbound turn to reply to).
+	var pushers []bridge.Pusher
+	if tg != nil {
+		pushers = append(pushers, tg.SendTextToOwner)
+	}
+	if wa != nil {
+		pushers = append(pushers, wa.PushToOwner)
+	}
+	if len(pushers) > 0 {
+		notifier := bridge.NewNotifier("", logger.With("component", "notify"), pushers...)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = notifier.Run(ctx)
 		}()
 	}
 

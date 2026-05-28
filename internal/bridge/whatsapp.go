@@ -149,6 +149,23 @@ func (w *WhatsApp) consumeQR(ctx context.Context, qrChan <-chan whatsmeow.QRChan
 	}
 }
 
+// PushToOwner sends a proactive message to the operator's own (self) chat.
+// Serves as a Pusher for the Notifier.
+func (w *WhatsApp) PushToOwner(ctx context.Context, text string) error {
+	if w.client == nil || w.client.Store.ID == nil {
+		return fmt.Errorf("whatsapp not connected")
+	}
+	to := w.client.Store.ID.ToNonAD()
+	for _, chunk := range chunkText(text, 4000) {
+		resp, err := w.client.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(chunk)})
+		if err != nil {
+			return fmt.Errorf("whatsapp notify: %w", err)
+		}
+		w.markSent(string(resp.ID))
+	}
+	return nil
+}
+
 // markSent records a message ID we sent so its echo can be skipped. Bounded so
 // it can't grow without limit over a long-lived session.
 func (w *WhatsApp) markSent(id string) {
