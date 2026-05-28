@@ -22,6 +22,10 @@ type ClaudeConfig struct {
 	PtyCols        uint16   `yaml:"pty_cols"`
 	PtyRows        uint16   `yaml:"pty_rows"`
 	ExtraArgs      []string `yaml:"extra_args,omitempty"`
+	// StallTimeoutS is how long the driver waits for the next transcript
+	// progress before declaring an upstream stall and cancelling the
+	// in-flight request. 0 = use the built-in default (90s).
+	StallTimeoutS int `yaml:"stall_timeout_s,omitempty"`
 }
 
 type TelegramConfig struct {

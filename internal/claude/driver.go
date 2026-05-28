@@ -164,11 +164,22 @@ func (d *Driver) Send(ctx context.Context, prompt string, ask ChoiceAsker) (stri
 	// "ready" between tool calls too, so a TUI-only signal would slice the
 	// turn into fragments — only the transcript knows whether more is coming.
 	if d.transcript.path() != "" {
-		if reply, ok := d.awaitTurn(ctx, transcriptOffset, ask); ok {
+		reply, err := d.awaitTurn(ctx, transcriptOffset, ask)
+		switch {
+		case err == nil:
 			return reply, nil
+		case errors.Is(err, ErrStalled):
+			// Propagate verbatim so the router can render a friendly timeout
+			// message instead of treating this as a generic failure.
+			return reply, err
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			// Fall through to the TUI scrape fallback.
+			d.log.Warn("transcript wait cancelled; falling back to TUI scrape",
+				"err", err, "transcript", d.transcript.describe())
+		default:
+			d.log.Warn("transcript wait failed; falling back to TUI scrape",
+				"err", err, "transcript", d.transcript.describe())
 		}
-		d.log.Warn("transcript did not reach terminal stop_reason; falling back to TUI scrape",
-			"transcript", d.transcript.describe())
 	}
 
 	// Fallback: TUI-based readiness + screen scrape. Only reached if the

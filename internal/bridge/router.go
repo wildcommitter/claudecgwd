@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -72,8 +73,19 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	reply, err := r.driver.Send(sendCtx, tagged, ask)
 	pendingCancel()
 	if err != nil {
-		r.log.Error("driver send failed", "err", err, "origin", tag)
-		_ = msg.Origin.Reply(ctx, "⚠️  assistant error: "+err.Error())
+		switch {
+		case errors.Is(err, claude.ErrStalled):
+			r.log.Warn("upstream stalled; sent timeout reply", "origin", tag, "partial_len", len(reply))
+			out := "⚠️  Claude went silent for too long and didn't finish the turn. " +
+				"I cancelled the in-flight request — the session is usable again; try sending the message again."
+			if reply != "" {
+				out = reply + "\n\n— — —\n" + out
+			}
+			_ = msg.Origin.Reply(ctx, out)
+		default:
+			r.log.Error("driver send failed", "err", err, "origin", tag)
+			_ = msg.Origin.Reply(ctx, "⚠️  assistant error: "+err.Error())
+		}
 		return
 	}
 	if err := msg.Origin.Reply(ctx, reply); err != nil {

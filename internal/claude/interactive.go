@@ -4,11 +4,18 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"time"
 )
+
+// ErrStalled is returned from Send when the session transcript shows no
+// progress for the stall timeout — typically an upstream API hang. The
+// driver also cancels the in-flight TUI request before returning, so the
+// session is usable again immediately after.
+var ErrStalled = errors.New("upstream stalled: no transcript progress")
 
 // This file adds handling for Claude Code's interactive AskUserQuestion tool.
 // When the model asks the user a multiple-choice question, the TUI renders a
@@ -274,18 +281,40 @@ func (d *Driver) cancelMenu() {
 }
 
 // awaitTurn waits for the current turn to reach a terminal stop_reason,
-// handling any AskUserQuestion menus that park the turn along the way. Returns
-// (reply, true) on normal completion, or ("", false) if the transcript never
-// reached a terminal state before ctx expired (the caller then falls back to
-// the TUI scrape).
-func (d *Driver) awaitTurn(ctx context.Context, since int64, ask ChoiceAsker) (string, bool) {
+// handling any AskUserQuestion menus that park the turn along the way.
+// Returns:
+//   - (reply, nil)          on normal completion
+//   - (partial, ErrStalled) when the transcript made no progress for stallAfter
+//     (the in-flight TUI request is also cancelled via Esc)
+//   - (partial, ctx.Err())  on ctx cancellation
+func (d *Driver) awaitTurn(ctx context.Context, since int64, ask ChoiceAsker) (string, error) {
 	const poll = 150 * time.Millisecond
+	stallAfter := d.stallTimeout()
+
 	handled := map[string]bool{} // tool_use ids we've already answered
+	lastProgressAt := time.Now()
+	lastTextLen := 0
+	lastHasAny := false
+
 	for {
-		text, reason, _ := d.transcript.replyAndState(since)
+		text, reason, hasAny := d.transcript.replyAndState(since)
 		if terminalStopReason(reason) {
-			return text, true
+			return text, nil
 		}
+		// Track transcript progress — any new content resets the stall clock.
+		if hasAny != lastHasAny || len(text) != lastTextLen {
+			lastProgressAt = time.Now()
+			lastTextLen = len(text)
+			lastHasAny = hasAny
+		}
+		if stallAfter > 0 && time.Since(lastProgressAt) >= stallAfter {
+			d.log.Warn("turn stalled; cancelling in-flight request",
+				"stall_for", time.Since(lastProgressAt).Round(time.Second),
+				"text_len", len(text))
+			d.cancelInFlight()
+			return text, ErrStalled
+		}
+
 		if id, qs, ok := d.transcript.pendingQuestion(since); ok && !handled[id] {
 			handled[id] = true
 			d.log.Info("interactive question detected", "tool_use_id", id, "questions", len(qs))
@@ -303,19 +332,38 @@ func (d *Driver) awaitTurn(ctx context.Context, since int64, ask ChoiceAsker) (s
 					d.cancelMenu()
 				}
 			}
-			// The tool_result will appear shortly and the turn resumes; pause so
-			// we don't spin before it flushes.
+			// Time spent waiting for the human / typing keystrokes must not
+			// count toward the stall timer.
+			lastProgressAt = time.Now()
 			select {
 			case <-ctx.Done():
-				return text, false
+				return text, ctx.Err()
 			case <-time.After(poll):
 			}
 			continue
 		}
+
 		select {
 		case <-ctx.Done():
-			return text, false
+			return text, ctx.Err()
 		case <-time.After(poll):
 		}
 	}
+}
+
+// stallTimeout returns the configured stall threshold or a 90s default.
+func (d *Driver) stallTimeout() time.Duration {
+	if d.cfg.StallTimeoutS > 0 {
+		return time.Duration(d.cfg.StallTimeoutS) * time.Second
+	}
+	return 90 * time.Second
+}
+
+// cancelInFlight asks the TUI to abort whatever request it has open with the
+// model. The TUI's status hint says "esc to interrupt", so we send Esc.
+func (d *Driver) cancelInFlight() {
+	if d.ptyFile == nil {
+		return
+	}
+	_, _ = d.ptyFile.Write([]byte{0x1b})
 }
