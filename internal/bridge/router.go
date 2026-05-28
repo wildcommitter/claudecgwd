@@ -70,14 +70,30 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	ask := func(_ context.Context, qs []claude.Question) ([]claude.Answer, error) {
 		return msg.Origin.AskChoices(ctx, qs)
 	}
+
 	reply, err := r.driver.Send(sendCtx, tagged, ask)
+
+	// On an upstream stall, transparently retry once. Crucially, do NOT
+	// cancel pendingCtx between attempts — that keeps the platform "typing"
+	// indicator alive across the gap so the user sees uninterrupted activity
+	// (Telegram chat-action, WhatsApp composing presence).
+	if errors.Is(err, claude.ErrStalled) {
+		r.log.Warn("upstream stalled; retrying once", "origin", tag, "partial_len", len(reply))
+		notice := "⚠️  Claude stalled — retrying once…"
+		if reply != "" {
+			notice = reply + "\n\n— — —\n" + notice
+		}
+		_ = msg.Origin.Reply(ctx, notice)
+		reply, err = r.driver.Send(sendCtx, tagged, ask)
+	}
+
 	pendingCancel()
+
 	if err != nil {
 		switch {
 		case errors.Is(err, claude.ErrStalled):
-			r.log.Warn("upstream stalled; sent timeout reply", "origin", tag, "partial_len", len(reply))
-			out := "⚠️  Claude went silent for too long and didn't finish the turn. " +
-				"I cancelled the in-flight request — the session is usable again; try sending the message again."
+			r.log.Warn("upstream stalled on retry; giving up", "origin", tag, "partial_len", len(reply))
+			out := "⚠️  Claude stalled again after the retry. The session is usable; please send the message again."
 			if reply != "" {
 				out = reply + "\n\n— — —\n" + out
 			}
