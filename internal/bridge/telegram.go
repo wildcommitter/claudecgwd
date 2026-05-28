@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,9 +31,10 @@ type Telegram struct {
 	log     *slog.Logger
 	inbound chan<- Inbound
 
-	bot     *bot.Bot
-	allowed map[int64]struct{}
-	ready   chan struct{} // closed once bot is set, so QRSink can wait for startup
+	bot      *bot.Bot
+	allowed  map[int64]struct{}
+	inboxDir string        // where sent files are downloaded
+	ready    chan struct{} // closed once bot is set, so QRSink can wait for startup
 
 	// Pending AskUserQuestion waiters, keyed by a per-question token embedded in
 	// inline-button callback data.
@@ -50,12 +53,12 @@ type tgWaiter struct {
 	done     bool         // guards single delivery
 }
 
-func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound) *Telegram {
+func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string) *Telegram {
 	allow := make(map[int64]struct{}, len(cfg.AllowedUserIDs))
 	for _, id := range cfg.AllowedUserIDs {
 		allow[id] = struct{}{}
 	}
-	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
+	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
 }
 
 func (t *Telegram) Run(ctx context.Context) error {
@@ -75,10 +78,11 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 		t.handleCallback(ctx, update.CallbackQuery)
 		return
 	}
-	if update.Message == nil || update.Message.Text == "" {
+	msg := update.Message
+	if msg == nil {
 		return
 	}
-	from := update.Message.From
+	from := msg.From
 	if from == nil {
 		return
 	}
@@ -88,16 +92,95 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 	}
 	origin := &tgOrigin{
 		bridge:    t,
-		chatID:    update.Message.Chat.ID,
+		chatID:    msg.Chat.ID,
 		userID:    from.ID,
 		username:  from.Username,
-		replyToID: update.Message.ID,
+		replyToID: msg.ID,
+	}
+
+	// File attachment? Download it (off the update loop) and notify the session.
+	if fileID, name, ok := tgAttachment(msg); ok {
+		go t.saveAttachment(ctx, fileID, name, msg.Caption, origin)
+		return
+	}
+
+	if msg.Text == "" {
+		return
 	}
 	select {
-	case t.inbound <- Inbound{Text: update.Message.Text, Origin: origin}:
+	case t.inbound <- Inbound{Text: msg.Text, Origin: origin}:
 	default:
 		t.log.Warn("telegram: inbound buffer full, dropping message", "user_id", from.ID)
 	}
+}
+
+// tgAttachment returns the file_id and a suggested filename for the first
+// attachment on a message, if any.
+func tgAttachment(m *models.Message) (fileID, name string, ok bool) {
+	switch {
+	case m.Document != nil:
+		return m.Document.FileID, m.Document.FileName, true
+	case len(m.Photo) > 0:
+		return m.Photo[len(m.Photo)-1].FileID, "photo.jpg", true // largest size
+	case m.Voice != nil:
+		return m.Voice.FileID, "voice.ogg", true
+	case m.Audio != nil:
+		return m.Audio.FileID, "audio.mp3", true
+	case m.Video != nil:
+		return m.Video.FileID, "video.mp4", true
+	case m.VideoNote != nil:
+		return m.VideoNote.FileID, "videonote.mp4", true
+	case m.Sticker != nil:
+		return m.Sticker.FileID, "sticker.webp", true
+	}
+	return "", "", false
+}
+
+// saveAttachment downloads a Telegram file to the inbox and enqueues a notice.
+func (t *Telegram) saveAttachment(ctx context.Context, fileID, name, caption string, origin *tgOrigin) {
+	data, err := t.downloadFile(ctx, fileID)
+	if err != nil {
+		t.log.Warn("telegram: file download failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't download that file: "+err.Error())
+		return
+	}
+	path, err := saveInbox(t.inboxDir, "telegram", name, data)
+	if err != nil {
+		t.log.Warn("telegram: saving file failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't save that file: "+err.Error())
+		return
+	}
+	t.log.Info("telegram: saved incoming file", "path", path, "bytes", len(data))
+	text := "[file received via telegram — saved to " + path + "]"
+	if caption != "" {
+		text += "\n" + caption
+	}
+	select {
+	case t.inbound <- Inbound{Text: text, Origin: origin}:
+	default:
+		t.log.Warn("telegram: inbound buffer full, dropping file notice")
+	}
+}
+
+// downloadFile fetches a Telegram file's bytes by file_id.
+func (t *Telegram) downloadFile(ctx context.Context, fileID string) ([]byte, error) {
+	f, err := t.bot.GetFile(ctx, &bot.GetFileParams{FileID: fileID})
+	if err != nil {
+		return nil, fmt.Errorf("get file: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, t.bot.FileDownloadLink(f), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download status %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 type tgOrigin struct {

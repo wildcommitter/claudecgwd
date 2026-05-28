@@ -32,6 +32,10 @@ whatsapp:
   allowed_jids:
     - "34123456789"
 
+files:
+  # Where files sent over chat are downloaded. Empty = ~/.local/share/assistant/inbox
+  inbox_dir: ""
+
 router:
   inbound_buffer: 32
   ready_idle_ms: 150

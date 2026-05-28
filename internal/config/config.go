@@ -12,7 +12,14 @@ type Config struct {
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Telegram TelegramConfig `yaml:"telegram"`
 	WhatsApp WhatsAppConfig `yaml:"whatsapp"`
+	Files    FilesConfig    `yaml:"files"`
 	Router   RouterConfig   `yaml:"router"`
+}
+
+type FilesConfig struct {
+	// InboxDir is where files sent over chat are downloaded. Defaults to
+	// ~/.local/share/assistant/inbox.
+	InboxDir string `yaml:"inbox_dir"`
 }
 
 type ClaudeConfig struct {
@@ -89,6 +96,10 @@ func (c *Config) applyDefaults() {
 	if c.WhatsApp.Enabled && c.WhatsApp.StorePath == "" {
 		home, _ := os.UserHomeDir()
 		c.WhatsApp.StorePath = filepath.Join(home, ".local", "share", "assistant", "whatsapp.db")
+	}
+	if c.Files.InboxDir == "" {
+		home, _ := os.UserHomeDir()
+		c.Files.InboxDir = filepath.Join(home, ".local", "share", "assistant", "inbox")
 	}
 	if c.Router.InboundBuffer == 0 {
 		c.Router.InboundBuffer = 32

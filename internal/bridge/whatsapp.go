@@ -55,10 +55,11 @@ type QRSink func(ctx context.Context, png []byte, caption string) error
 // / linked-device protocol) to the shared Claude session. Pairing is done once
 // by scanning a QR code; subsequent runs resume from the stored session.
 type WhatsApp struct {
-	cfg     config.WhatsAppConfig
-	log     *slog.Logger
-	inbound chan<- Inbound
-	qrSink  QRSink
+	cfg      config.WhatsAppConfig
+	log      *slog.Logger
+	inbound  chan<- Inbound
+	qrSink   QRSink
+	inboxDir string // where sent files are downloaded
 
 	allowed map[string]struct{} // bare sender phone numbers permitted to drive
 
@@ -76,12 +77,12 @@ type WhatsApp struct {
 	sentIDs map[string]struct{}
 }
 
-func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink) *WhatsApp {
+func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string) *WhatsApp {
 	allow := make(map[string]struct{}, len(cfg.AllowedJIDs))
 	for _, j := range cfg.AllowedJIDs {
 		allow[strings.TrimSpace(j)] = struct{}{}
 	}
-	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
+	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
 }
 
 func (w *WhatsApp) Run(ctx context.Context) error {
@@ -146,6 +147,57 @@ func (w *WhatsApp) consumeQR(ctx context.Context, qrChan <-chan whatsmeow.QRChan
 		default:
 			w.log.Info("whatsapp: qr event", "event", evt.Event)
 		}
+	}
+}
+
+// waMedia reports a suggested filename and caption if the message carries a
+// downloadable attachment.
+func waMedia(m *waE2E.Message) (name, caption string, ok bool) {
+	switch {
+	case m.GetImageMessage() != nil:
+		return "image.jpg", m.GetImageMessage().GetCaption(), true
+	case m.GetDocumentMessage() != nil:
+		d := m.GetDocumentMessage()
+		n := d.GetFileName()
+		if n == "" {
+			n = "document"
+		}
+		return n, d.GetCaption(), true
+	case m.GetVideoMessage() != nil:
+		return "video.mp4", m.GetVideoMessage().GetCaption(), true
+	case m.GetAudioMessage() != nil:
+		return "audio.ogg", "", true
+	case m.GetStickerMessage() != nil:
+		return "sticker.webp", "", true
+	}
+	return "", "", false
+}
+
+// saveMedia downloads a WhatsApp attachment to the inbox and enqueues a notice.
+func (w *WhatsApp) saveMedia(msg *waE2E.Message, name, caption string, origin *waOrigin) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	data, err := w.client.DownloadAny(ctx, msg)
+	if err != nil {
+		w.log.Warn("whatsapp: file download failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't download that file: "+err.Error())
+		return
+	}
+	path, err := saveInbox(w.inboxDir, "whatsapp", name, data)
+	if err != nil {
+		w.log.Warn("whatsapp: saving file failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't save that file: "+err.Error())
+		return
+	}
+	w.log.Info("whatsapp: saved incoming file", "path", path, "bytes", len(data))
+	text := "[file received via whatsapp — saved to " + path + "]"
+	if caption != "" {
+		text += "\n" + caption
+	}
+	select {
+	case w.inbound <- Inbound{Text: text, Origin: origin}:
+	default:
+		w.log.Warn("whatsapp: inbound buffer full, dropping file notice")
 	}
 }
 
@@ -232,10 +284,6 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 		}
 	}
 
-	text := strings.TrimSpace(rawText)
-	if text == "" {
-		return
-	}
 	// Reply target: for the self-chat, send to our own phone-number JID (the
 	// visible "Message Yourself" thread) rather than the @lid the event came in
 	// on — replies to the @lid don't surface in that chat on the phone.
@@ -243,7 +291,22 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 	if selfChat && w.client.Store.ID != nil {
 		chat = w.client.Store.ID.ToNonAD()
 	}
-	w.log.Info("whatsapp: accepted message", "self_chat", selfChat, "from_me", m.Info.IsFromMe, "reply_to", chat.String())
+	origin := &waOrigin{bridge: w, chat: chat, sender: senderUser}
+
+	// File attachment? Download it (off the event goroutine) and notify the
+	// session with the saved path. Checked before the empty-text return since
+	// media messages carry no conversation text.
+	if name, caption, ok := waMedia(m.Message); ok {
+		w.log.Info("whatsapp: accepted file", "self_chat", selfChat)
+		go w.saveMedia(m.Message, name, caption, origin)
+		return
+	}
+
+	text := strings.TrimSpace(rawText)
+	if text == "" {
+		return
+	}
+	w.log.Info("whatsapp: accepted message", "self_chat", selfChat, "from_me", m.Info.IsFromMe)
 
 	// Route to a pending interactive-question waiter if one is active.
 	w.amu.Lock()
@@ -257,7 +320,6 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 		return
 	}
 
-	origin := &waOrigin{bridge: w, chat: chat, sender: senderUser}
 	select {
 	case w.inbound <- Inbound{Text: text, Origin: origin}:
 	default:
