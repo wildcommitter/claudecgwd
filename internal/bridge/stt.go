@@ -13,23 +13,22 @@ import (
 // faster-whisper venv (scripts/transcribe.py). A nil *Transcriber, or one whose
 // Enabled() is false, means audio is treated as a plain file instead.
 type Transcriber struct {
-	python string
-	script string
-	model  string
+	command string
+	model   string
 }
 
 func NewTranscriber(cfg config.STTConfig) *Transcriber {
 	if !cfg.Enabled {
 		return nil
 	}
-	return &Transcriber{python: cfg.Python, script: cfg.Script, model: cfg.Model}
+	return &Transcriber{command: cfg.Command, model: cfg.Model}
 }
 
-func (t *Transcriber) Enabled() bool { return t != nil && t.python != "" && t.script != "" }
+func (t *Transcriber) Enabled() bool { return t != nil && t.command != "" }
 
 // Transcribe returns the transcript of the audio file at path.
 func (t *Transcriber) Transcribe(ctx context.Context, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, t.python, t.script, path, t.model)
+	cmd := exec.CommandContext(ctx, t.command, path, t.model)
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {

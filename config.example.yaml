@@ -38,12 +38,12 @@ files:
 
 stt:
   # Transcribe voice/audio messages and feed the text in as the prompt.
-  # Requires a faster-whisper venv (see scripts/transcribe.py).
+  # Set up the engine once with scripts/setup-stt.sh.
   enabled: false
   model: small # faster-whisper model: tiny/base/small/medium/large-v3
-  # Empty = ~/.local/share/assistant/stt-venv/bin/python and <workdir>/scripts/transcribe.py
-  python: ""
-  script: ""
+  # Transcription command, called as `<command> <audio> <model>`.
+  # Empty = <workdir>/scripts/transcribe
+  command: ""
 
 router:
   inbound_buffer: 32

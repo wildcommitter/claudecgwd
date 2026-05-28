@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Transcribe an audio file to text — the single entrypoint the bridge calls.
+# Wraps the faster-whisper venv so callers don't need to know about Python.
+#
+#   transcribe <audio-file> [model]
+#
+# Env overrides: STT_VENV (default ~/.local/share/assistant/stt-venv),
+# WHISPER_MODEL (default small). Prints the transcript to stdout.
+
+set -euo pipefail
+
+VENV="${STT_VENV:-$HOME/.local/share/assistant/stt-venv}"
+MODEL="${2:-${WHISPER_MODEL:-small}}"
+here="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: transcribe <audio-file> [model]" >&2
+  exit 2
+fi
+if [[ ! -x "$VENV/bin/python" ]]; then
+  echo "STT venv missing at $VENV (run scripts/setup-stt.sh)" >&2
+  exit 1
+fi
+
+exec "$VENV/bin/python" "$here/transcribe.py" "$1" "$MODEL"

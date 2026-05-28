@@ -29,11 +29,9 @@ type STTConfig struct {
 	Enabled bool `yaml:"enabled"`
 	// Model is the faster-whisper model name (tiny/base/small/medium/...).
 	Model string `yaml:"model"`
-	// Python is the venv interpreter with faster-whisper installed. Defaults to
-	// ~/.local/share/assistant/stt-venv/bin/python.
-	Python string `yaml:"python"`
-	// Script is the transcribe.py path. Defaults to <workdir>/scripts/transcribe.py.
-	Script string `yaml:"script"`
+	// Command is the transcription entrypoint, invoked as `<command> <audio>
+	// <model>`. Defaults to <workdir>/scripts/transcribe.
+	Command string `yaml:"command"`
 }
 
 type ClaudeConfig struct {
@@ -116,15 +114,11 @@ func (c *Config) applyDefaults() {
 		c.Files.InboxDir = filepath.Join(home, ".local", "share", "assistant", "inbox")
 	}
 	if c.STT.Enabled {
-		home, _ := os.UserHomeDir()
 		if c.STT.Model == "" {
 			c.STT.Model = "small"
 		}
-		if c.STT.Python == "" {
-			c.STT.Python = filepath.Join(home, ".local", "share", "assistant", "stt-venv", "bin", "python")
-		}
-		if c.STT.Script == "" {
-			c.STT.Script = filepath.Join(c.Claude.Workdir, "scripts", "transcribe.py")
+		if c.STT.Command == "" {
+			c.STT.Command = filepath.Join(c.Claude.Workdir, "scripts", "transcribe")
 		}
 	}
 	if c.Router.InboundBuffer == 0 {
