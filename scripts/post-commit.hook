@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Installed by scripts/install.sh as .git/hooks/post-commit.
+# Rebuild and reload the assistant after every commit. To skip on a
+# particular commit, run: ASSISTANT_SKIP_INSTALL=1 git commit ...
+set -euo pipefail
+if [[ "${ASSISTANT_SKIP_INSTALL:-0}" == "1" ]]; then
+  exit 0
+fi
+exec "$(git rev-parse --show-toplevel)/scripts/install.sh"

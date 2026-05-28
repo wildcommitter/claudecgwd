@@ -27,8 +27,8 @@ processed at a time; both bots feed the same FIFO queue.
 ## Install
 
 ```sh
-# Build
-go build -o ~/.local/bin/assistant ./cmd/assistant
+# Build, install ~/.local/bin/assistant, restart systemd unit (if enabled)
+./scripts/install.sh
 
 # Config
 mkdir -p ~/.config/assistant
@@ -63,6 +63,18 @@ cp deploy/assistant.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now assistant
 journalctl --user -u assistant -f
+```
+
+## Development loop
+
+Use `./scripts/install.sh` instead of bare `go build` — it runs tests, installs
+the binary to `~/.local/bin/assistant`, and restarts the systemd unit so the
+running bot picks up your changes. The script also (re)installs a
+`post-commit` git hook from `scripts/post-commit.hook` that does the same
+thing automatically after every commit. To skip on a particular commit:
+
+```sh
+ASSISTANT_SKIP_INSTALL=1 git commit ...
 ```
 
 ## Known limitations (v1)
