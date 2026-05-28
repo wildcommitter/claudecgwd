@@ -68,6 +68,12 @@ type WhatsApp struct {
 	// message as the answer to an interactive question.
 	amu        sync.Mutex
 	pendingAns map[string]chan string
+
+	// sentIDs records IDs of messages we sent so we can skip their echoes.
+	// In the linked-device model the bot runs on the operator's own account,
+	// so its own replies come back as IsFromMe events and would otherwise loop.
+	sentMu  sync.Mutex
+	sentIDs map[string]struct{}
 }
 
 func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink) *WhatsApp {
@@ -75,7 +81,7 @@ func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inb
 	for _, j := range cfg.AllowedJIDs {
 		allow[strings.TrimSpace(j)] = struct{}{}
 	}
-	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, allowed: allow, pendingAns: map[string]chan string{}}
+	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
 }
 
 func (w *WhatsApp) Run(ctx context.Context) error {
@@ -143,6 +149,27 @@ func (w *WhatsApp) consumeQR(ctx context.Context, qrChan <-chan whatsmeow.QRChan
 	}
 }
 
+// markSent records a message ID we sent so its echo can be skipped. Bounded so
+// it can't grow without limit over a long-lived session.
+func (w *WhatsApp) markSent(id string) {
+	if id == "" {
+		return
+	}
+	w.sentMu.Lock()
+	defer w.sentMu.Unlock()
+	if len(w.sentIDs) > 2000 {
+		w.sentIDs = map[string]struct{}{}
+	}
+	w.sentIDs[id] = struct{}{}
+}
+
+func (w *WhatsApp) wasSent(id string) bool {
+	w.sentMu.Lock()
+	defer w.sentMu.Unlock()
+	_, ok := w.sentIDs[id]
+	return ok
+}
+
 func (w *WhatsApp) handleEvent(evt interface{}) {
 	switch v := evt.(type) {
 	case *events.Message:
@@ -155,22 +182,44 @@ func (w *WhatsApp) handleEvent(evt interface{}) {
 }
 
 func (w *WhatsApp) onMessage(m *events.Message) {
+	// The bot runs as a linked device on the operator's own account, so the
+	// operator talks to it via the "Message Yourself" chat — those messages are
+	// IsFromMe. Accept those, but skip (a) the bot's own replies echoing back
+	// and (b) the operator's messages to *other* chats (don't butt in).
+	chatUser := m.Info.Chat.ToNonAD().User
+	senderUser := m.Info.Sender.ToNonAD().User
+	// The operator drives the bot from the "Message Yourself" chat. In a from-me
+	// event the sender is always the operator; if the chat is the operator too
+	// (chat == sender) it's that self-chat. Comparing chat vs sender works
+	// regardless of whether WhatsApp addresses it as a phone JID or an @lid.
+	selfChat := m.Info.IsFromMe && chatUser == senderUser
+
+	rawText := m.Message.GetConversation()
+	if rawText == "" {
+		rawText = m.Message.GetExtendedTextMessage().GetText()
+	}
+
 	if m.Info.IsFromMe {
-		return
+		if w.wasSent(string(m.Info.ID)) {
+			return // our own outgoing reply echoing back
+		}
+		if !selfChat {
+			return // operator messaging someone else — don't butt in
+		}
+		// from-me + self-chat = the operator's control channel; authorized.
+	} else {
+		// Incoming from someone else: require an allowlisted sender.
+		if _, ok := w.allowed[senderUser]; !ok {
+			w.log.Warn("whatsapp: rejecting unauthorized sender", "sender", senderUser)
+			return
+		}
 	}
-	text := m.Message.GetConversation()
+
+	text := strings.TrimSpace(rawText)
 	if text == "" {
-		text = m.Message.GetExtendedTextMessage().GetText()
-	}
-	text = strings.TrimSpace(text)
-	if text == "" {
 		return
 	}
-	sender := m.Info.Sender.ToNonAD().User
-	if _, ok := w.allowed[sender]; !ok {
-		w.log.Warn("whatsapp: rejecting unauthorized sender", "sender", sender)
-		return
-	}
+	w.log.Info("whatsapp: accepted message", "self_chat", selfChat, "from_me", m.Info.IsFromMe)
 	chat := m.Info.Chat
 
 	// Route to a pending interactive-question waiter if one is active.
@@ -185,11 +234,11 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 		return
 	}
 
-	origin := &waOrigin{bridge: w, chat: chat, sender: sender}
+	origin := &waOrigin{bridge: w, chat: chat, sender: senderUser}
 	select {
 	case w.inbound <- Inbound{Text: text, Origin: origin}:
 	default:
-		w.log.Warn("whatsapp: inbound buffer full, dropping message", "sender", sender)
+		w.log.Warn("whatsapp: inbound buffer full, dropping message", "sender", senderUser)
 	}
 }
 
@@ -267,10 +316,11 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 	// WhatsApp tolerates long messages, but keep chunks reasonable.
 	chunks := chunkText(text, 4000)
 	for i, chunk := range chunks {
-		_, err := o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
+		resp, err := o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
 		if err != nil {
 			return fmt.Errorf("whatsapp send: %w", err)
 		}
+		o.bridge.markSent(string(resp.ID)) // so the echo of our own reply is ignored
 		if i+1 < len(chunks) {
 			time.Sleep(150 * time.Millisecond)
 		}
