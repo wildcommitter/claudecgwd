@@ -1,0 +1,33 @@
+# Alternative to the Quadlet unit (deploy/assistant.container): run the
+# assistant via `podman compose` as a systemd --user service. Requires a
+# compose provider (podman-compose or docker-compose) on PATH — if you don't
+# have one, prefer the Quadlet unit instead.
+#
+# Assumes `docker` is aliased to `podman` is NOT enough for systemd (units don't
+# read shell aliases), so this calls `podman` directly.
+#
+# Install:
+#   systemctl --user stop assistant            # stop the native unit first
+#   systemctl --user disable assistant
+#   cp deploy/assistant-docker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now assistant-docker
+#
+# Logs:  journalctl --user -u assistant-docker -f
+
+[Unit]
+Description=Claude assistant bridge (Podman Compose)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/claudecgwd
+# --build keeps the image in sync with the working tree on each (re)start.
+ExecStart=/usr/bin/podman compose up --build
+ExecStop=/usr/bin/podman compose down
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

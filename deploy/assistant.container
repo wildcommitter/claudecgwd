@@ -1,0 +1,52 @@
+# Podman Quadlet unit — the recommended way to run the assistant under rootless
+# Podman + systemd (no compose provider needed).
+#
+# Setup:
+#   cd ~/claudecgwd
+#   podman build -t claudecgwd-assistant:latest .      # build the image
+#   systemctl --user stop assistant                    # stop the native unit
+#   systemctl --user disable assistant
+#   mkdir -p ~/.config/containers/systemd
+#   cp deploy/assistant.container ~/.config/containers/systemd/
+#   systemctl --user daemon-reload
+#   systemctl --user start assistant                   # unit name = file stem
+#
+# Logs:  journalctl --user -u assistant -f
+# Rebuild after code changes: re-run `podman build`, then
+#   systemctl --user restart assistant
+
+[Unit]
+Description=Claude assistant bridge (Podman, sandboxed)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=claude-assistant
+Image=localhost/claudecgwd-assistant:latest
+# We pin claude inside the image; never let Podman auto-update it.
+AutoUpdate=disabled
+
+# Rootless: keep the host uid identical inside so bind mounts stay writable.
+UserNS=keep-id
+
+EnvironmentFile=%h/.config/assistant/secrets.env
+Environment=HOME=/home/user
+Environment=DISABLE_AUTOUPDATER=1
+
+# The sandbox boundary — only these host paths are visible.
+Volume=%h/.claude:/home/user/.claude:rw
+Volume=%h/.claude.json:/home/user/.claude.json:rw
+Volume=%h/.config/assistant:/home/user/.config/assistant:ro
+Volume=%h/claudecgwd:/home/user/claudecgwd:rw
+
+# Hardening.
+NoNewPrivileges=true
+DropCapability=ALL
+Tmpfs=/tmp
+
+[Service]
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

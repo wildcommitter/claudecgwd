@@ -1,0 +1,67 @@
+# Sandboxed deployment of the Claude assistant bridge.
+#
+# The container can see ONLY what is mounted below: the claude auth/session
+# state, the assistant config, and the project workdir. Nothing else of the
+# host is visible to the bypass-permissions Claude session — that is the point.
+#
+# IMPORTANT: stop the host systemd service first
+#   systemctl --user stop assistant
+# Running both at once means two bots polling the same Telegram token and two
+# writers on the same session transcript — they will fight.
+#
+# Usage:
+#   docker compose up --build        # foreground, see logs
+#   docker compose up -d --build     # detached
+#
+# To give the assistant access to more project directories, add more entries
+# under volumes (e.g. - ${HOME}/code/foo:/home/user/code/foo) and point
+# config.yaml's workdir / your prompts at them.
+
+services:
+  assistant:
+    build:
+      context: .
+      args:
+        CLAUDE_VERSION: "2.1.154"
+        UID: "1000"
+        GID: "1000"
+    image: claudecgwd-assistant:latest
+    container_name: claude-assistant
+    restart: unless-stopped
+    # Rootless Podman: map the invoking host user to the SAME uid inside the
+    # container so bind-mounted ~/.claude etc. stay owned by — and writable as —
+    # that user (the image's USER is uid 1000, matching the host user). Without
+    # this, rootless Podman maps the host user to container-root and the mounts
+    # come out owned by a high subuid, so claude can't read its credentials.
+    # Under plain Docker, DELETE this line (Docker has no keep-id) and add
+    # `user: "1000:1000"` instead.
+    userns_mode: "keep-id"
+
+    # Secrets (TELEGRAM_BOT_TOKEN, etc.) — same file the systemd unit uses.
+    env_file:
+      - ${HOME}/.config/assistant/secrets.env
+    environment:
+      - HOME=/home/user
+      - DISABLE_AUTOUPDATER=1
+
+    volumes:
+      # Auth + session transcripts (read-write: claude appends turns here).
+      - ${HOME}/.claude:/home/user/.claude
+      - ${HOME}/.claude.json:/home/user/.claude.json
+      # Assistant config (read-only — the container never needs to change it).
+      - ${HOME}/.config/assistant:/home/user/.config/assistant:ro
+      # The project the assistant operates in (its workdir). This is the only
+      # host code the sandbox can touch.
+      - ${HOME}/claudecgwd:/home/user/claudecgwd
+
+    # Sandbox hardening: no privilege escalation, drop all Linux capabilities
+    # (plain process exec for the Bash tool needs none). Relax only if a tool
+    # turns out to need a specific capability.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Writable scratch space without making the rest of the FS writable.
+    tmpfs:
+      - /tmp

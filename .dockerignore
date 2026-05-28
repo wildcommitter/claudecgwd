@@ -1,0 +1,13 @@
+# Keep the build context small and reproducible.
+.git
+.github
+*.md
+docs/
+deploy/
+docker-compose.yml
+Dockerfile
+.dockerignore
+# Local build artifacts / editor cruft.
+assistant
+*.test
+*.out
