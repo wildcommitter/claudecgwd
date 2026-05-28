@@ -32,8 +32,9 @@ ARG GID=1000
 # ca-certificates: TLS to the API and Telegram. git: claude's git integration.
 # ripgrep: claude's search (the bundled copy needs glibc, which we have, but the
 # system one is a safe fallback). curl: only for the install step.
+# python3/venv + ffmpeg: voice/audio transcription (faster-whisper).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git ripgrep \
+        ca-certificates curl git ripgrep python3 python3-venv ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -g ${GID} user \
@@ -48,6 +49,13 @@ ENV DISABLE_AUTOUPDATER=1
 # Install the pinned native claude into ~/.local (matches the host's path).
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_VERSION} \
     && /home/user/.local/bin/claude --version
+
+# Bundle the STT engine: build the faster-whisper venv and bake the model so
+# voice/audio transcription works in the container with no host dependency.
+# WHISPER_MODEL must match the model used at runtime (config stt.model).
+ARG WHISPER_MODEL=small
+COPY --chown=${UID}:${GID} scripts/setup-stt.sh /home/user/setup-stt.sh
+RUN WHISPER_MODEL=${WHISPER_MODEL} bash /home/user/setup-stt.sh
 
 COPY --chown=${UID}:${GID} --from=builder /out/assistant /home/user/.local/bin/assistant
 

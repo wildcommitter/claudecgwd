@@ -13,6 +13,11 @@ agent running with `--permission-mode bypassPermissions`) and **portability**
 - `claude` `2.1.154`, installed via the official native installer and pinned;
   auto-update is disabled (`DISABLE_AUTOUPDATER=1`) so the image is the unit of
   update. Bump with `--build-arg CLAUDE_VERSION=x.y.z`.
+- **Voice transcription bundled**: `python3` + `ffmpeg` + a faster-whisper venv
+  with the model baked in at build (`scripts/setup-stt.sh`, `--build-arg
+  WHISPER_MODEL=small`). So STT works in the container with no host dependency
+  — but it adds ~600 MB to the image. Keep `WHISPER_MODEL` in sync with
+  `stt.model` in config.
 - Runs as uid/gid `1000` (matching the host user) so bind-mounted files keep
   their ownership.
 
