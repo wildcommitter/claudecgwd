@@ -10,6 +10,13 @@ type Origin interface {
 	// prefix passed to Claude so the model knows where a message came from.
 	Describe() string
 
+	// NotifyPending is called between message receipt and reply dispatch and
+	// should signal "I'm working" on the origin platform (e.g. Telegram's
+	// typing indicator). Implementations must loop until ctx is cancelled
+	// since most platforms time the hint out after a few seconds. For
+	// platforms without such an affordance (IRC), this can be a no-op.
+	NotifyPending(ctx context.Context)
+
 	// Reply sends text to the origin platform. Implementations are responsible
 	// for chunking long messages to fit platform limits.
 	Reply(ctx context.Context, text string) error

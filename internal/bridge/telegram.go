@@ -56,13 +56,6 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 		t.log.Warn("telegram: rejecting unauthorized user", "user_id", from.ID, "username", from.Username)
 		return
 	}
-	// Show a typing indicator so the user knows we received the message.
-	go func() {
-		_, _ = b.SendChatAction(ctx, &bot.SendChatActionParams{
-			ChatID: update.Message.Chat.ID,
-			Action: models.ChatActionTyping,
-		})
-	}()
 	origin := &tgOrigin{
 		bridge:    t,
 		chatID:    update.Message.Chat.ID,
@@ -91,6 +84,24 @@ func (o *tgOrigin) Describe() string {
 		return fmt.Sprintf("telegram(@%s)", o.username)
 	}
 	return fmt.Sprintf("telegram(id=%d)", o.userID)
+}
+
+// NotifyPending pings the "typing" chat action every 4s until ctx is
+// cancelled. Telegram fades the indicator after ~5s, so the loop re-arms it.
+func (o *tgOrigin) NotifyPending(ctx context.Context) {
+	t := time.NewTicker(4 * time.Second)
+	defer t.Stop()
+	for {
+		_, _ = o.bridge.bot.SendChatAction(ctx, &bot.SendChatActionParams{
+			ChatID: o.chatID,
+			Action: models.ChatActionTyping,
+		})
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func (o *tgOrigin) Reply(ctx context.Context, text string) error {

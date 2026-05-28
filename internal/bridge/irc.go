@@ -193,6 +193,9 @@ func (o *ircOrigin) Describe() string {
 	return fmt.Sprintf("irc(/msg %s)", o.target)
 }
 
+// NotifyPending is a no-op on IRC — there's no per-target "typing" affordance.
+func (o *ircOrigin) NotifyPending(ctx context.Context) {}
+
 func (o *ircOrigin) Reply(ctx context.Context, text string) error {
 	if strings.TrimSpace(text) == "" {
 		text = "(empty response)"

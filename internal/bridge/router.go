@@ -53,7 +53,12 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	sendCtx, cancel := context.WithTimeout(ctx, r.turnBudget)
 	defer cancel()
 
+	pendingCtx, pendingCancel := context.WithCancel(sendCtx)
+	go msg.Origin.NotifyPending(pendingCtx)
+	defer pendingCancel()
+
 	reply, err := r.driver.Send(sendCtx, tagged)
+	pendingCancel()
 	if err != nil {
 		r.log.Error("driver send failed", "err", err, "origin", tag)
 		_ = msg.Origin.Reply(ctx, "⚠️  assistant error: "+err.Error())
