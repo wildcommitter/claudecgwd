@@ -21,24 +21,6 @@ telegram:
   allowed_user_ids:
     - 123456789
 
-irc:
-  # Leave server empty to disable IRC.
-  server: irc.libera.chat:6697
-  tls: true
-  nick: myassistant
-  user: myassistant
-  real_name: "My Assistant"
-  sasl_user: myassistant
-  sasl_pass_env: IRC_SASL_PASS
-  channels:
-    - "#mychannel"
-  # SASL account names allowed to address the bot (preferred).
-  allowed_accounts:
-    - mynick
-  # Fallback for networks without SASL: nicknames (case-insensitive).
-  # allowed_nicks:
-  #   - mynick
-
 router:
   inbound_buffer: 32
   ready_idle_ms: 150

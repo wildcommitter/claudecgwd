@@ -68,18 +68,6 @@ func run(configPath string, logger *slog.Logger) error {
 		}()
 	}
 
-	if cfg.IRC.Enabled() {
-		ir := bridge.NewIRC(cfg.IRC, logger.With("component", "irc"), inbound)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := ir.Run(ctx); err != nil {
-				logger.Error("irc exited", "err", err)
-				cancel()
-			}
-		}()
-	}
-
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

@@ -10,7 +10,6 @@ import (
 type Config struct {
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Telegram TelegramConfig `yaml:"telegram"`
-	IRC      IRCConfig      `yaml:"irc"`
 	Router   RouterConfig   `yaml:"router"`
 }
 
@@ -34,20 +33,6 @@ type TelegramConfig struct {
 	Token          string  `yaml:"-"`
 }
 
-type IRCConfig struct {
-	Server          string   `yaml:"server"`
-	TLS             bool     `yaml:"tls"`
-	Nick            string   `yaml:"nick"`
-	User            string   `yaml:"user,omitempty"`
-	RealName        string   `yaml:"real_name,omitempty"`
-	SaslUser        string   `yaml:"sasl_user"`
-	SaslPassEnv     string   `yaml:"sasl_pass_env"`
-	Channels        []string `yaml:"channels"`
-	AllowedAccounts []string `yaml:"allowed_accounts"`
-	AllowedNicks    []string `yaml:"allowed_nicks,omitempty"`
-	SaslPass        string   `yaml:"-"`
-}
-
 type RouterConfig struct {
 	InboundBuffer    int `yaml:"inbound_buffer"`
 	ReadyIdleMs      int `yaml:"ready_idle_ms"`
@@ -55,7 +40,6 @@ type RouterConfig struct {
 }
 
 func (c *TelegramConfig) Enabled() bool { return c.TokenEnv != "" }
-func (c *IRCConfig) Enabled() bool      { return c.Server != "" && c.Nick != "" }
 
 func Load(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
@@ -110,12 +94,6 @@ func (c *Config) resolveSecrets() error {
 			return fmt.Errorf("telegram token env %q is unset", c.Telegram.TokenEnv)
 		}
 	}
-	if c.IRC.Enabled() && c.IRC.SaslPassEnv != "" {
-		c.IRC.SaslPass = os.Getenv(c.IRC.SaslPassEnv)
-		if c.IRC.SaslPass == "" {
-			return fmt.Errorf("irc sasl password env %q is unset", c.IRC.SaslPassEnv)
-		}
-	}
 	return nil
 }
 
@@ -126,14 +104,11 @@ func (c *Config) validate() error {
 	if c.Claude.Workdir == "" {
 		return fmt.Errorf("claude.workdir is required")
 	}
-	if !c.Telegram.Enabled() && !c.IRC.Enabled() {
-		return fmt.Errorf("at least one of telegram or irc must be configured")
+	if !c.Telegram.Enabled() {
+		return fmt.Errorf("telegram must be configured")
 	}
-	if c.Telegram.Enabled() && len(c.Telegram.AllowedUserIDs) == 0 {
+	if len(c.Telegram.AllowedUserIDs) == 0 {
 		return fmt.Errorf("telegram.allowed_user_ids must list at least one user id")
-	}
-	if c.IRC.Enabled() && len(c.IRC.AllowedAccounts) == 0 && len(c.IRC.AllowedNicks) == 0 {
-		return fmt.Errorf("irc.allowed_accounts or irc.allowed_nicks must list at least one entry")
 	}
 	return nil
 }

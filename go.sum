@@ -10,8 +10,6 @@ github.com/go-telegram/bot v1.21.0 h1:Va/PbGc2vBDdv57GCUEEVV6ROlHWiC6SklJY9Hvhzp
 github.com/go-telegram/bot v1.21.0/go.mod h1:i2TRs7fXWIeaceF3z7KzsMt/he0TwkVC680mvdTFYeM=
 github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02 h1:AgcIVYPa6XJnU3phs104wLj8l5GEththEw6+F79YsIY=
 github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02/go.mod h1:Q48J4R4DvxnHolD5P8pOtXigYlRuPLGl6moFx3ulM68=
-github.com/lrstanley/girc v1.1.1 h1:0Y8a2tqQGDeFXfBQkAYOu5DbWqlydCJsi+4N+td4azk=
-github.com/lrstanley/girc v1.1.1/go.mod h1:lgrnhcF8bg/Bd5HA5DOb4Z+uGqUqGnp4skr+J2GwVgI=
 github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW4TvVgFr4=
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-runewidth v0.0.23 h1:7ykA0T0jkPpzSvMS5i9uoNn2Xy3R383f9HDx3RybWcw=

@@ -4,7 +4,7 @@
 //
 // Spawns claude under the driver, sends one prompt, prints the extracted
 // response, exits. Useful for verifying the driver works against the
-// installed claude binary before wiring up Telegram/IRC.
+// installed claude binary before wiring up Telegram.
 package main
 
 import (

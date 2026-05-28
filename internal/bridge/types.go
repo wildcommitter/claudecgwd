@@ -9,16 +9,16 @@ import (
 // Origin knows how to deliver a reply back to whoever sent an Inbound message.
 // Each bridge defines its own concrete Origin implementation.
 type Origin interface {
-	// Describe returns a short human-readable tag, e.g. "telegram(@alice)" or
-	// "irc(libera/#chan:alice)". Used both for logging and for the routing
-	// prefix passed to Claude so the model knows where a message came from.
+	// Describe returns a short human-readable tag, e.g. "telegram(@alice)".
+	// Used both for logging and for the routing prefix passed to Claude so the
+	// model knows where a message came from.
 	Describe() string
 
 	// NotifyPending is called between message receipt and reply dispatch and
 	// should signal "I'm working" on the origin platform (e.g. Telegram's
 	// typing indicator). Implementations must loop until ctx is cancelled
 	// since most platforms time the hint out after a few seconds. For
-	// platforms without such an affordance (IRC), this can be a no-op.
+	// platforms without such an affordance, this can be a no-op.
 	NotifyPending(ctx context.Context)
 
 	// Reply sends text to the origin platform. Implementations are responsible
@@ -28,9 +28,9 @@ type Origin interface {
 	// AskChoices presents one or more interactive multiple-choice questions
 	// (from Claude's AskUserQuestion tool) to the user and blocks until they
 	// respond, returning one Answer per question in order. Implementations use
-	// whatever native affordance fits the platform (Telegram inline buttons,
-	// IRC numbered reply). It must honor ctx cancellation (turn timeout) so a
-	// parked question can't pin the session forever.
+	// whatever native affordance fits the platform (e.g. Telegram inline
+	// buttons). It must honor ctx cancellation (turn timeout) so a parked
+	// question can't pin the session forever.
 	AskChoices(ctx context.Context, qs []claude.Question) ([]claude.Answer, error)
 }
 

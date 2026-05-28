@@ -33,29 +33,3 @@ func TestChunkText_HardSplitWhenNoBoundary(t *testing.T) {
 		t.Fatalf("chunks exceed max: %d %d", len(got[0]), len(got[1]))
 	}
 }
-
-func TestSplitIRCLines_NewlinesAndWrapping(t *testing.T) {
-	s := "first line\n" + strings.Repeat("word ", 100) + "\nlast"
-	got := splitIRCLines(s, 80)
-	if len(got) < 3 {
-		t.Fatalf("want >=3 lines, got %d", len(got))
-	}
-	if got[0] != "first line" {
-		t.Fatalf("first line: %q", got[0])
-	}
-	if got[len(got)-1] != "last" {
-		t.Fatalf("last line: %q", got[len(got)-1])
-	}
-	for _, line := range got {
-		if len(line) > 80 {
-			t.Fatalf("line exceeds 80 bytes: %q", line)
-		}
-	}
-}
-
-func TestSplitIRCLines_StripsBlanks(t *testing.T) {
-	got := splitIRCLines("a\n\n\nb\n", 80)
-	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
-		t.Fatalf("want [a b], got %#v", got)
-	}
-}
