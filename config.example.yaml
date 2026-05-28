@@ -8,6 +8,9 @@ claude:
   pty_rows: 500
   # Optional extra args passed to `claude`, e.g. ["--model", "opus"]
   extra_args: []
+  # How long to wait for new transcript content before declaring an upstream
+  # stall and replying with a timeout message. 0 = default (180s).
+  stall_timeout_s: 180
 
 telegram:
   # Read the bot token from this env var (NEVER put the token in this file).

@@ -351,12 +351,12 @@ func (d *Driver) awaitTurn(ctx context.Context, since int64, ask ChoiceAsker) (s
 	}
 }
 
-// stallTimeout returns the configured stall threshold or a 90s default.
+// stallTimeout returns the configured stall threshold or a 3-minute default.
 func (d *Driver) stallTimeout() time.Duration {
 	if d.cfg.StallTimeoutS > 0 {
 		return time.Duration(d.cfg.StallTimeoutS) * time.Second
 	}
-	return 90 * time.Second
+	return 3 * time.Minute
 }
 
 // cancelInFlight asks the TUI to abort whatever request it has open with the
