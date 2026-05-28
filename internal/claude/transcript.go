@@ -2,7 +2,6 @@ package claude
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -216,25 +215,6 @@ func (t *transcriptReader) replyAndState(since int64) (text string, lastStopReas
 	}
 	text = strings.Join(parts, "\n\n")
 	return text, lastStopReason, hasAny
-}
-
-// waitForTurnComplete polls the transcript until the most recent assistant
-// entry past `since` has a terminal stop_reason (turn fully done). Returns
-// the concatenated reply text. If ctx is cancelled before a terminal reason
-// is observed, returns whatever text exists with ok=false.
-func (t *transcriptReader) waitForTurnComplete(ctx context.Context, since int64) (string, bool) {
-	const poll = 150 * time.Millisecond
-	for {
-		text, reason, _ := t.replyAndState(since)
-		if terminalStopReason(reason) {
-			return text, true
-		}
-		select {
-		case <-ctx.Done():
-			return text, false
-		case <-time.After(poll):
-		}
-	}
 }
 
 // describe is used in logs to show which transcript path is in effect.

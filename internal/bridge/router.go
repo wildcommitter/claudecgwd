@@ -5,12 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/wildcommitter/claudecgwd/internal/claude"
 )
 
 // Sender is what the router needs from the Claude driver. Defined as an
-// interface so the router can be tested with a stub.
+// interface so the router can be tested with a stub. The ask callback lets the
+// driver surface an interactive AskUserQuestion menu back to the origin
+// mid-turn.
 type Sender interface {
-	Send(ctx context.Context, prompt string) (string, error)
+	Send(ctx context.Context, prompt string, ask claude.ChoiceAsker) (string, error)
 }
 
 type Router struct {
@@ -57,7 +61,10 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	go msg.Origin.NotifyPending(pendingCtx)
 	defer pendingCancel()
 
-	reply, err := r.driver.Send(sendCtx, tagged)
+	ask := func(actx context.Context, qs []claude.Question) ([]claude.Answer, error) {
+		return msg.Origin.AskChoices(actx, qs)
+	}
+	reply, err := r.driver.Send(sendCtx, tagged, ask)
 	pendingCancel()
 	if err != nil {
 		r.log.Error("driver send failed", "err", err, "origin", tag)

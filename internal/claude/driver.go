@@ -138,7 +138,7 @@ func (d *Driver) Close() error {
 
 // Send writes prompt into the TUI, waits for the next ready-prompt, and
 // returns the captured response text.
-func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
+func (d *Driver) Send(ctx context.Context, prompt string, ask ChoiceAsker) (string, error) {
 	d.sendMu.Lock()
 	defer d.sendMu.Unlock()
 
@@ -164,7 +164,7 @@ func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
 	// "ready" between tool calls too, so a TUI-only signal would slice the
 	// turn into fragments — only the transcript knows whether more is coming.
 	if d.transcript.path() != "" {
-		if reply, ok := d.transcript.waitForTurnComplete(ctx, transcriptOffset); ok {
+		if reply, ok := d.awaitTurn(ctx, transcriptOffset, ask); ok {
 			return reply, nil
 		}
 		d.log.Warn("transcript did not reach terminal stop_reason; falling back to TUI scrape",
@@ -592,4 +592,3 @@ func dropEchoedPrompt(s, userPrompt string) string {
 	}
 	return strings.Join(out, "\n")
 }
-

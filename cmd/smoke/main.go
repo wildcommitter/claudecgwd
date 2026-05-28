@@ -62,7 +62,7 @@ func main() {
 
 	sendCtx, sendCancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer sendCancel()
-	reply, err := driver.Send(sendCtx, *prompt)
+	reply, err := driver.Send(sendCtx, *prompt, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "send: %v\n", err)
 		os.Exit(1)

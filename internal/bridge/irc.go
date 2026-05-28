@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/lrstanley/girc"
 
+	"github.com/wildcommitter/claudecgwd/internal/claude"
 	"github.com/wildcommitter/claudecgwd/internal/config"
 )
 
@@ -23,11 +25,16 @@ type IRC struct {
 	log     *slog.Logger
 	inbound chan<- Inbound
 
-	client   *girc.Client
+	client          *girc.Client
 	allowedAccounts map[string]struct{}
 	allowedNicks    map[string]struct{}
 
 	sendMu sync.Mutex // serializes outbound sends across all origins for rate limiting
+
+	// pendingAns holds, per reply-target, a channel awaiting the next inbound
+	// message as the answer to an interactive question.
+	amu        sync.Mutex
+	pendingAns map[string]chan string
 }
 
 func NewIRC(cfg config.IRCConfig, log *slog.Logger, inbound chan<- Inbound) *IRC {
@@ -39,7 +46,7 @@ func NewIRC(cfg config.IRCConfig, log *slog.Logger, inbound chan<- Inbound) *IRC
 	for _, n := range cfg.AllowedNicks {
 		nicks[strings.ToLower(n)] = struct{}{}
 	}
-	return &IRC{cfg: cfg, log: log, inbound: inbound, allowedAccounts: accts, allowedNicks: nicks}
+	return &IRC{cfg: cfg, log: log, inbound: inbound, allowedAccounts: accts, allowedNicks: nicks, pendingAns: map[string]chan string{}}
 }
 
 func (b *IRC) Run(ctx context.Context) error {
@@ -52,11 +59,11 @@ func (b *IRC) Run(ctx context.Context) error {
 		Name:   firstNonEmpty(b.cfg.RealName, b.cfg.Nick),
 		SSL:    b.cfg.TLS,
 		SupportedCaps: map[string][]string{
-			"account-tag":      nil,
-			"server-time":      nil,
-			"message-tags":     nil,
-			"extended-join":    nil,
-			"account-notify":   nil,
+			"account-tag":    nil,
+			"server-time":    nil,
+			"message-tags":   nil,
+			"extended-join":  nil,
+			"account-notify": nil,
 		},
 	}
 	if b.cfg.SaslUser != "" && b.cfg.SaslPass != "" {
@@ -151,6 +158,19 @@ func (b *IRC) onMessage(c *girc.Client, e girc.Event) {
 		replyTarget = e.Source.Name // DM: reply to nick
 	}
 
+	// If there's an interactive question awaiting an answer on this target,
+	// route this message to it instead of starting a new turn.
+	b.amu.Lock()
+	ans := b.pendingAns[replyTarget]
+	b.amu.Unlock()
+	if ans != nil {
+		select {
+		case ans <- text:
+		default:
+		}
+		return
+	}
+
 	origin := &ircOrigin{
 		bridge:      b,
 		target:      replyTarget,
@@ -242,6 +262,84 @@ func splitIRCLines(text string, maxBytes int) []string {
 		}
 	}
 	return out
+}
+
+// AskChoices presents each question as a numbered list and treats the user's
+// next message on this target as the selection (a number, comma-separated
+// numbers for multi-select, or free text).
+func (o *ircOrigin) AskChoices(ctx context.Context, qs []claude.Question) ([]claude.Answer, error) {
+	out := make([]claude.Answer, len(qs))
+	for i, q := range qs {
+		ans, err := o.bridge.askQuestion(ctx, o, q)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = ans
+	}
+	return out, nil
+}
+
+func (b *IRC) askQuestion(ctx context.Context, o *ircOrigin, q claude.Question) (claude.Answer, error) {
+	var sb strings.Builder
+	if q.Header != "" {
+		sb.WriteString(q.Header + ": ")
+	}
+	sb.WriteString(q.Question + "\n")
+	for i, opt := range q.Options {
+		fmt.Fprintf(&sb, "%d. %s", i+1, opt.Label)
+		if opt.Description != "" {
+			sb.WriteString(" — " + opt.Description)
+		}
+		sb.WriteString("\n")
+	}
+	if q.MultiSelect {
+		sb.WriteString("(reply with the numbers, comma-separated)")
+	} else {
+		sb.WriteString("(reply with the number)")
+	}
+	if err := o.Reply(ctx, sb.String()); err != nil {
+		return claude.Answer{}, err
+	}
+
+	ch := make(chan string, 1)
+	b.amu.Lock()
+	b.pendingAns[o.target] = ch
+	b.amu.Unlock()
+	defer func() {
+		b.amu.Lock()
+		delete(b.pendingAns, o.target)
+		b.amu.Unlock()
+	}()
+
+	select {
+	case reply := <-ch:
+		return parseChoiceReply(reply, len(q.Options), q.MultiSelect), nil
+	case <-ctx.Done():
+		return claude.Answer{}, ctx.Err()
+	}
+}
+
+// parseChoiceReply turns "2", "1,3", or free text into an Answer. Numbers are
+// 1-based in the message and converted to 0-based indices, bounded to nOptions.
+func parseChoiceReply(reply string, nOptions int, multi bool) claude.Answer {
+	fields := strings.FieldsFunc(reply, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+	var idxs []int
+	for _, f := range fields {
+		n, err := strconv.Atoi(strings.TrimSpace(f))
+		if err != nil || n < 1 || n > nOptions {
+			continue
+		}
+		idxs = append(idxs, n-1)
+		if !multi {
+			break
+		}
+	}
+	if len(idxs) == 0 {
+		return claude.Answer{FreeText: strings.TrimSpace(reply)}
+	}
+	return claude.Answer{Indices: idxs}
 }
 
 func splitHostPort(s string) (string, int) {
