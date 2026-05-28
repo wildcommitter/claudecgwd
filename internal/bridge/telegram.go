@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	tgMaxChars  = 4000            // leave headroom under Telegram's 4096 limit
-	tgAskExpiry = 5 * time.Minute // safety bound on a single pending question
+	tgMaxChars  = 4000           // leave headroom under Telegram's 4096 limit
+	tgAskExpiry = 24 * time.Hour // safety bound on a parked question — long enough that a real human won't trip it
 )
 
 type Telegram struct {

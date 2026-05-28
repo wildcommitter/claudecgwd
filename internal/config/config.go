@@ -92,7 +92,10 @@ func (c *Config) applyDefaults() {
 		c.Router.ReadyIdleMs = 150
 	}
 	if c.Router.WatchdogTimeoutS == 0 {
-		c.Router.WatchdogTimeoutS = 300
+		// 1 hour: generous enough for any non-interactive turn including
+		// big tool-heavy multi-step ones. AskChoices waits sit on the
+		// parent ctx so this doesn't bound human reply time.
+		c.Router.WatchdogTimeoutS = 3600
 	}
 }
 

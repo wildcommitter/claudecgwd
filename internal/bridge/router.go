@@ -61,8 +61,13 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	go msg.Origin.NotifyPending(pendingCtx)
 	defer pendingCancel()
 
-	ask := func(actx context.Context, qs []claude.Question) ([]claude.Answer, error) {
-		return msg.Origin.AskChoices(actx, qs)
+	// AskChoices uses the parent ctx, not sendCtx, so a slow human reply
+	// can't trip the per-turn budget. The driver guarantees AskChoices is
+	// only invoked while it has a parked tool_use waiting on a tool_result —
+	// once an answer comes back, the rest of the turn falls back under
+	// sendCtx normally.
+	ask := func(_ context.Context, qs []claude.Question) ([]claude.Answer, error) {
+		return msg.Origin.AskChoices(ctx, qs)
 	}
 	reply, err := r.driver.Send(sendCtx, tagged, ask)
 	pendingCancel()

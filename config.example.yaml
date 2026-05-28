@@ -39,4 +39,7 @@ irc:
 router:
   inbound_buffer: 32
   ready_idle_ms: 150
-  watchdog_timeout_s: 300
+  # Caps a single non-interactive turn. AskUserQuestion waits are detached
+  # from this timer (they use the parent context) so a slow human reply
+  # won't trip it; only a hung tool or runaway turn will.
+  watchdog_timeout_s: 3600
