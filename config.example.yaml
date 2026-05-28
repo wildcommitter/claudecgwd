@@ -1,0 +1,42 @@
+claude:
+  binary: /home/user/.local/bin/claude
+  workdir: /home/user/claudecgwd
+  # Generate once with: uuidgen
+  session_id: REPLACE-WITH-UUID
+  permission_mode: bypassPermissions
+  pty_cols: 200
+  pty_rows: 60
+  # Optional extra args passed to `claude`, e.g. ["--model", "opus"]
+  extra_args: []
+
+telegram:
+  # Read the bot token from this env var (NEVER put the token in this file).
+  # Leave token_env empty to disable Telegram.
+  token_env: TELEGRAM_BOT_TOKEN
+  # Numeric Telegram user IDs allowed to drive the assistant. Find yours by
+  # messaging @userinfobot on Telegram.
+  allowed_user_ids:
+    - 123456789
+
+irc:
+  # Leave server empty to disable IRC.
+  server: irc.libera.chat:6697
+  tls: true
+  nick: myassistant
+  user: myassistant
+  real_name: "My Assistant"
+  sasl_user: myassistant
+  sasl_pass_env: IRC_SASL_PASS
+  channels:
+    - "#mychannel"
+  # SASL account names allowed to address the bot (preferred).
+  allowed_accounts:
+    - mynick
+  # Fallback for networks without SASL: nicknames (case-insensitive).
+  # allowed_nicks:
+  #   - mynick
+
+router:
+  inbound_buffer: 32
+  ready_idle_ms: 150
+  watchdog_timeout_s: 300
