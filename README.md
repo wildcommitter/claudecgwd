@@ -57,6 +57,43 @@ systemctl --user enable --now assistant
 journalctl --user -u assistant -f
 ```
 
+## Run with Docker / Podman
+
+A sandboxed container image is provided. This is the short version; see
+[docs/DOCKER.md](docs/DOCKER.md) for the full guide (sandbox boundary table,
+rootless Podman notes, and the Quadlet unit).
+
+> **Stop the native service first** — otherwise two instances fight over the
+> Telegram token and the session transcript:
+>
+> ```sh
+> systemctl --user stop assistant
+> ```
+
+```sh
+cd ~/claudecgwd
+
+# Build the image and run (foreground, watch logs)
+docker compose up --build
+
+# Or detached
+docker compose up -d --build
+
+# Follow logs / stop
+docker compose logs -f
+docker compose down
+```
+
+The image bakes in a pinned `claude` and runs as your uid; the compose file
+bind-mounts only `~/.claude`, `~/.claude.json`, `~/.config/assistant` (ro), and
+the project dir — nothing else of the host is visible to the sandboxed session.
+
+**Podman:** `alias docker=podman` makes the commands above work. The compose file
+sets `userns: keep-id` for rootless bind-mount ownership. For a daemon-free
+systemd deployment, use the Quadlet unit `deploy/assistant.container` instead
+(see docs/DOCKER.md). On a btrfs host, Podman needs its native btrfs storage
+driver (`~/.config/containers/storage.conf` → `driver = "btrfs"`).
+
 ## Development loop
 
 Use `./scripts/install.sh` instead of bare `go build` — it runs tests, installs
