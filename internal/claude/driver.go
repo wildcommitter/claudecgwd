@@ -4,7 +4,6 @@
 package claude
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,8 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
-	"github.com/charmbracelet/x/ansi"
 	"github.com/creack/pty"
 	"github.com/hinshun/vt10x"
 
@@ -26,10 +25,9 @@ import (
 )
 
 const (
-	startupTimeout  = 60 * time.Second
-	pollInterval    = 50 * time.Millisecond
-	defaultIdleMs   = 150
-	maxResponseSize = 1 << 20 // 1 MiB raw bytes per turn
+	startupTimeout = 60 * time.Second
+	pollInterval   = 50 * time.Millisecond
+	defaultIdleMs  = 200
 )
 
 // Driver owns a single long-lived `claude` PTY session.
@@ -44,11 +42,9 @@ type Driver struct {
 	// sendMu serializes Send calls so only one prompt is in flight.
 	sendMu sync.Mutex
 
-	// stateMu guards lastWriteAt, rawBuf, capturing.
+	// stateMu guards lastWriteAt.
 	stateMu     sync.Mutex
 	lastWriteAt time.Time
-	rawBuf      bytes.Buffer
-	capturing   bool
 
 	done chan struct{}
 }
@@ -116,14 +112,8 @@ func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
 	d.sendMu.Lock()
 	defer d.sendMu.Unlock()
 
-	// Snapshot pre-submission visible screen so we can fall back to a screen
-	// diff when raw capture is incomplete or noisy.
 	beforeScreen := d.snapshotScreen()
-
-	d.stateMu.Lock()
-	d.rawBuf.Reset()
-	d.capturing = true
-	d.stateMu.Unlock()
+	d.dumpScreen("before", beforeScreen)
 
 	if err := d.writePrompt(prompt); err != nil {
 		return "", err
@@ -136,46 +126,53 @@ func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
-	if err := d.waitReady(ctx); err != nil {
+	if err := d.waitForResponse(ctx); err != nil {
 		return "", fmt.Errorf("waiting for response: %w", err)
 	}
 
-	d.stateMu.Lock()
-	raw := append([]byte(nil), d.rawBuf.Bytes()...)
-	d.capturing = false
-	d.rawBuf.Reset()
-	d.stateMu.Unlock()
-
 	afterScreen := d.snapshotScreen()
-	return extractResponse(raw, beforeScreen, afterScreen, prompt), nil
+	d.dumpScreen("after", afterScreen)
+	return extractResponse(beforeScreen, afterScreen, prompt), nil
+}
+
+// dumpScreen writes a screen snapshot to $CLAUDECGWD_DUMP_DIR if set.
+// No-op otherwise.
+func (d *Driver) dumpScreen(label, screen string) {
+	dir := os.Getenv("CLAUDECGWD_DUMP_DIR")
+	if dir == "" {
+		return
+	}
+	ts := time.Now().UnixNano()
+	path := filepath.Join(dir, fmt.Sprintf("screen-%d-%s.txt", ts, label))
+	_ = os.WriteFile(path, []byte(screen), 0o644)
+	d.log.Info("screen dumped", "label", label, "path", path)
 }
 
 // writePrompt sends the user prompt followed by Enter. We use bracketed-paste
-// markers so the TUI treats the entire payload as a single paste event,
-// avoiding slash-command parsing for messages that start with `/` and keeping
-// embedded newlines as literal input.
+// markers so the TUI treats the message body as a single paste event, then
+// send Enter as a separate keystroke after a brief pause so the TUI has a
+// chance to commit the paste before submitting.
 func (d *Driver) writePrompt(prompt string) error {
 	const (
 		bpStart = "\x1b[200~"
 		bpEnd   = "\x1b[201~"
 	)
-	payload := bpStart + prompt + bpEnd + "\r"
-	if _, err := io.WriteString(d.ptyFile, payload); err != nil {
-		return fmt.Errorf("write pty: %w", err)
+	if _, err := io.WriteString(d.ptyFile, bpStart+prompt+bpEnd); err != nil {
+		return fmt.Errorf("write paste: %w", err)
 	}
-	// Give the TUI a moment to register the paste before we begin polling for
-	// busy->ready transition.
+	time.Sleep(120 * time.Millisecond)
+	if _, err := io.WriteString(d.ptyFile, "\r"); err != nil {
+		return fmt.Errorf("write enter: %w", err)
+	}
 	time.Sleep(80 * time.Millisecond)
 	return nil
 }
 
-// waitReady blocks until the screen shows an idle ready-prompt or ctx fires.
-// "Ready" = the cursor sits on a line whose first non-space character is `>`
-// AND the PTY has been idle for at least idleMs.
+// waitReady blocks until the screen shows the input-prompt anchor AND no
+// busy marker AND the PTY has been idle for at least defaultIdleMs.
+// Used by Start() for the very first ready detection.
 func (d *Driver) waitReady(ctx context.Context) error {
-	idleMs := defaultIdleMs
-	idle := time.Duration(idleMs) * time.Millisecond
-
+	idle := time.Duration(defaultIdleMs) * time.Millisecond
 	t := time.NewTicker(pollInterval)
 	defer t.Stop()
 	for {
@@ -189,53 +186,141 @@ func (d *Driver) waitReady(ctx context.Context) error {
 		d.stateMu.Lock()
 		quiet := time.Since(d.lastWriteAt) >= idle
 		d.stateMu.Unlock()
-		if !quiet {
-			continue
-		}
-		if d.cursorOnPrompt() {
+		if quiet && d.screenIsReady() {
 			return nil
 		}
 	}
 }
 
-// cursorOnPrompt returns true when the cursor row's first non-space character
-// is `>` (the claude TUI input prompt indicator).
-func (d *Driver) cursorOnPrompt() bool {
-	d.term.Lock()
-	defer d.term.Unlock()
-	cur := d.term.Cursor()
-	cols, _ := d.term.Size()
-	var line strings.Builder
-	for x := 0; x < cols; x++ {
-		g := d.term.Cell(x, cur.Y)
-		line.WriteRune(g.Char)
+// waitForResponse handles the post-submission wait. It uses a two-phase
+// strategy so we don't declare ready before Claude even starts working:
+//
+//  1. Wait up to phase1Timeout for the screen to enter a "busy" state (a
+//     spinner / status keyword appears). If busy never appears (the response
+//     was instant), we accept whatever ready state we observe at the end of
+//     phase 1.
+//  2. Once busy was observed, wait for the busy markers to clear AND the
+//     screen to be idle AND the prompt anchor to be visible.
+func (d *Driver) waitForResponse(ctx context.Context) error {
+	const phase1Timeout = 3 * time.Second
+	idle := time.Duration(defaultIdleMs) * time.Millisecond
+
+	phase1Deadline := time.Now().Add(phase1Timeout)
+	sawBusy := false
+	t := time.NewTicker(pollInterval)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-d.done:
+			return errors.New("claude process exited")
+		case <-t.C:
+		}
+
+		d.stateMu.Lock()
+		quiet := time.Since(d.lastWriteAt) >= idle
+		d.stateMu.Unlock()
+
+		busy, hasPrompt := d.screenState()
+		if busy {
+			sawBusy = true
+			continue
+		}
+		// Not busy.
+		if !hasPrompt {
+			continue
+		}
+		if !quiet {
+			continue
+		}
+		if sawBusy {
+			return nil
+		}
+		// Haven't seen busy yet — give phase 1 a chance.
+		if time.Now().After(phase1Deadline) {
+			return nil
+		}
 	}
-	trimmed := strings.TrimLeft(line.String(), " \t")
-	return strings.HasPrefix(trimmed, ">")
 }
 
-// snapshotScreen returns the full visible screen text with trailing whitespace
-// trimmed per line and trailing empty lines removed.
+// screenIsReady is equivalent to !busy && hasPrompt.
+func (d *Driver) screenIsReady() bool {
+	busy, hasPrompt := d.screenState()
+	return !busy && hasPrompt
+}
+
+// screenState reports whether the screen currently shows a "busy" marker
+// (spinner, status keyword) and whether the input-prompt anchor is visible.
+func (d *Driver) screenState() (busy, hasPrompt bool) {
+	d.term.Lock()
+	defer d.term.Unlock()
+	cols, rows := d.term.Size()
+	for y := 0; y < rows; y++ {
+		line := readRow(d.term, y, cols)
+		if line == "" {
+			continue
+		}
+		// The bottom hint contains words like "/effort" and "shift+tab" that we
+		// otherwise treat as status; recognize and skip it.
+		if bottomHintRe.MatchString(line) {
+			trimmed := strings.TrimLeft(line, " \t│")
+			if strings.HasPrefix(trimmed, "❯") || strings.HasPrefix(trimmed, ">") {
+				hasPrompt = true
+			}
+			continue
+		}
+		if busyMarkerRe.MatchString(line) {
+			busy = true
+		}
+		trimmed := strings.TrimLeft(line, " \t│")
+		if strings.HasPrefix(trimmed, "❯") || strings.HasPrefix(trimmed, ">") {
+			hasPrompt = true
+		}
+	}
+	return busy, hasPrompt
+}
+
+// readRow returns the text content of row y. Unicode whitespace is normalized
+// to ASCII space so downstream regex / trim logic doesn't have to know about
+// NBSP, ideographic spaces, etc. Assumes caller holds the terminal lock.
+func readRow(term vt10x.Terminal, y, cols int) string {
+	var sb strings.Builder
+	for x := 0; x < cols; x++ {
+		g := term.Cell(x, y)
+		switch {
+		case g.Char == 0:
+			sb.WriteByte(' ')
+		case unicode.IsSpace(g.Char):
+			sb.WriteByte(' ')
+		default:
+			sb.WriteRune(g.Char)
+		}
+	}
+	return strings.TrimRight(sb.String(), " \t")
+}
+
+// snapshotScreen returns the full visible screen text, one row per line,
+// trailing whitespace trimmed per row and trailing blank rows removed.
 func (d *Driver) snapshotScreen() string {
 	d.term.Lock()
 	defer d.term.Unlock()
 	cols, rows := d.term.Size()
-	var sb strings.Builder
+	lines := make([]string, 0, rows)
 	for y := 0; y < rows; y++ {
-		for x := 0; x < cols; x++ {
-			sb.WriteRune(d.term.Cell(x, y).Char)
-		}
-		sb.WriteByte('\n')
+		lines = append(lines, readRow(d.term, y, cols))
 	}
-	// Trim trailing blank lines.
-	s := strings.TrimRight(sb.String(), "\n \t\x00")
-	return s
+	// Trim trailing blank rows.
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (d *Driver) buildArgs() []string {
 	args := []string{}
-	sessFile := filepath.Join(os.Getenv("HOME"), ".claude", "sessions", d.cfg.SessionID+".json")
-	if _, err := os.Stat(sessFile); err == nil {
+	if d.sessionExists() {
 		args = append(args, "--resume", d.cfg.SessionID)
 	} else {
 		args = append(args, "--session-id", d.cfg.SessionID)
@@ -253,6 +338,21 @@ func (d *Driver) buildArgs() []string {
 	return args
 }
 
+// sessionExists checks whether the claude transcript file for the configured
+// session UUID and workdir already exists. claude stores transcripts at
+// ~/.claude/projects/<slug>/<uuid>.jsonl where <slug> is the absolute workdir
+// with `/` replaced by `-`.
+func (d *Driver) sessionExists() bool {
+	absWorkdir, err := filepath.Abs(d.cfg.Workdir)
+	if err != nil {
+		return false
+	}
+	slug := strings.ReplaceAll(absWorkdir, "/", "-")
+	path := filepath.Join(os.Getenv("HOME"), ".claude", "projects", slug, d.cfg.SessionID+".jsonl")
+	_, err = os.Stat(path)
+	return err == nil
+}
+
 func (d *Driver) readLoop() {
 	buf := make([]byte, 8192)
 	for {
@@ -261,11 +361,8 @@ func (d *Driver) readLoop() {
 			chunk := buf[:n]
 			d.stateMu.Lock()
 			d.lastWriteAt = time.Now()
-			d.term.Write(chunk)
-			if d.capturing && d.rawBuf.Len()+n <= maxResponseSize {
-				d.rawBuf.Write(chunk)
-			}
 			d.stateMu.Unlock()
+			d.term.Write(chunk)
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
@@ -284,122 +381,163 @@ func (d *Driver) waitLoop() {
 // --- response extraction --------------------------------------------------
 
 var (
-	// matches a line whose first non-space character is `>` (the input prompt)
-	promptLineRe = regexp.MustCompile(`^\s*>(\s|$)`)
-	// matches a line starting with a spinner/marker character
-	spinnerLineRe = regexp.MustCompile(`^\s*[⠁⠂⠄⡀⢀⠠⠐⠈⠉⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✻✶✢*]`)
-	// matches lines starting with known TUI status keywords
-	statusLineRe = regexp.MustCompile(`(?i)^\s*(esc to interrupt|ctrl\+[a-z] to|approximate|tokens|context left|pondering|thinking|working|crunching|cooking|brewing|mulling|simmering)`)
+	// matches a line whose first non-space character is the input prompt anchor
+	promptLineRe = regexp.MustCompile(`^\s*[│]*\s*[❯>](\s|$)`)
+	// matches a line that is a TUI status/spinner/completion marker we want
+	// to drop from the captured response.
+	noiseLineRe = regexp.MustCompile(`(?i)^\s*(?:[·•⠁⠂⠄⡀⢀⠠⠐⠈⠉⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✻✶✢*]\s+\S|esc to interrupt|ctrl\+[a-z] to|cogitated for|pondered for|thought for|cooked for)`)
 	// matches purely decorative separators
 	separatorRe = regexp.MustCompile(`^\s*[─━═╌╍-]{3,}\s*$`)
+	// matches the persistent bottom hint line (different from transient status)
+	bottomHintRe = regexp.MustCompile(`(?i)(shift\+tab to cycle|bypass permissions on)`)
+	// busyMarkerRe matches a line that indicates the TUI is *currently busy*.
+	// Critically excludes ✻/✶/✢ which are used for post-hoc "Cogitated for Xs"
+	// completion markers, and excludes past-tense verbs.
+	// Real busy markers: present-participle verbs, "esc to interrupt", or a
+	// braille/middle-dot spinner followed by a present-participle.
+	busyMarkerRe = regexp.MustCompile(`(?i)(esc to interrupt|\b(?:pondering|thinking|working|crunching|cooking|brewing|mulling|simmering|propagating|synthesizing|brainstorming|deliberating|musing|ruminating|considering|reasoning|reflecting|computing|analyzing|generating|processing|cogitating|loading|reading|searching|exploring|planning|writing|preparing|fetching|gathering|reviewing|inspecting|investigating)\b)`)
+	// assistantPrefixRe strips the leading "● " marker the TUI uses to label
+	// assistant message lines.
+	assistantPrefixRe = regexp.MustCompile(`^\s*●\s+`)
 )
 
-// extractResponse takes the raw byte stream captured during a turn and
-// produces a best-effort plain-text response.
+// extractResponse compares the visible-screen snapshots taken right before
+// submission and right after the TUI returned to its ready prompt, and
+// returns the new content that appeared (the assistant's reply).
 //
-// The TUI redraws aggressively so the raw stream contains overlapping
-// versions of the screen. We strip ANSI, scan the resulting lines, drop
-// status/spinner/prompt/separator lines, dedupe consecutive duplicates, and
-// trim any echo of the user's prompt and any leading/trailing prompt artifacts.
-//
-// If the raw extraction comes back empty, fall back to a screen diff.
-func extractResponse(raw []byte, beforeScreen, afterScreen, userPrompt string) string {
-	stripped := ansi.Strip(string(raw))
-	stripped = strings.ReplaceAll(stripped, "\r", "")
+// Strategy: compute longest common prefix and suffix of the two screens at
+// line granularity. The "middle" of `after` that isn't part of either is the
+// newly-added content. Then filter status/prompt/separator boilerplate and
+// drop any echo of the user's prompt.
+func extractResponse(beforeScreen, afterScreen, userPrompt string) string {
+	beforeLines := strings.Split(beforeScreen, "\n")
+	afterLines := strings.Split(afterScreen, "\n")
 
-	cleaned := filterLines(stripped)
+	// Common prefix.
+	prefix := 0
+	for prefix < len(beforeLines) && prefix < len(afterLines) &&
+		strings.TrimRight(beforeLines[prefix], " \t") == strings.TrimRight(afterLines[prefix], " \t") {
+		prefix++
+	}
+	// Common suffix (constrained to not overlap the prefix on either side).
+	suffix := 0
+	for suffix < len(beforeLines)-prefix && suffix < len(afterLines)-prefix &&
+		strings.TrimRight(beforeLines[len(beforeLines)-1-suffix], " \t") ==
+			strings.TrimRight(afterLines[len(afterLines)-1-suffix], " \t") {
+		suffix++
+	}
+
+	mid := afterLines[prefix : len(afterLines)-suffix]
+	cleaned := filterLines(strings.Join(mid, "\n"))
 	cleaned = dropEchoedPrompt(cleaned, userPrompt)
 	cleaned = strings.TrimSpace(cleaned)
-
-	if cleaned == "" {
-		// Fall back to comparing visible screens.
-		cleaned = screenDiff(beforeScreen, afterScreen)
-		cleaned = filterLines(cleaned)
-		cleaned = dropEchoedPrompt(cleaned, userPrompt)
-		cleaned = strings.TrimSpace(cleaned)
-	}
 	return cleaned
 }
 
 func filterLines(s string) string {
 	out := make([]string, 0, 64)
-	var last string
+	var lastNonBlank string
 	for _, line := range strings.Split(s, "\n") {
 		line = strings.TrimRight(line, " \t")
 		if line == "" {
-			if last == "" {
-				continue
+			if len(out) > 0 && out[len(out)-1] != "" {
+				out = append(out, "")
 			}
-			out = append(out, "")
-			last = ""
 			continue
 		}
-		if promptLineRe.MatchString(line) || spinnerLineRe.MatchString(line) || statusLineRe.MatchString(line) || separatorRe.MatchString(line) {
+		if promptLineRe.MatchString(line) ||
+			noiseLineRe.MatchString(line) ||
+			separatorRe.MatchString(line) ||
+			bottomHintRe.MatchString(line) ||
+			isBoxedFrameLine(line) {
 			continue
 		}
-		// Drop lines that look like the empty input prompt frame: "│ > " etc.
-		if isBoxedPromptLine(line) {
+		// Strip a leading box-drawing column ("│ " etc.) that the TUI uses to
+		// indent assistant content inside a frame.
+		line = stripFramePrefix(line)
+		// Strip the "● " assistant-message prefix.
+		line = assistantPrefixRe.ReplaceAllString(line, "")
+		if line == "" {
 			continue
 		}
-		if line == last {
+		if line == lastNonBlank {
 			continue
 		}
 		out = append(out, line)
-		last = line
+		lastNonBlank = line
+	}
+	// Trim trailing blanks.
+	for len(out) > 0 && out[len(out)-1] == "" {
+		out = out[:len(out)-1]
 	}
 	return strings.Join(out, "\n")
 }
 
-func isBoxedPromptLine(line string) bool {
+func isBoxedFrameLine(line string) bool {
 	t := strings.TrimSpace(line)
 	if t == "" {
 		return false
 	}
-	// Common box-drawing characters used in the claude TUI input frame.
-	const boxChars = "│┌┐└┘─━╭╮╯╰"
-	first, _ := firstRune(t)
-	return strings.ContainsRune(boxChars, first)
+	// A line consisting solely of frame characters (corners, horizontals).
+	const frameChars = "┌┐└┘─━╭╮╯╰═┄┅"
+	for _, r := range t {
+		if !strings.ContainsRune(frameChars, r) && r != ' ' {
+			return false
+		}
+	}
+	return true
 }
 
-func firstRune(s string) (rune, int) {
-	for _, r := range s {
-		return r, 1
+// stripFramePrefix removes a leading "│ " column from the line, which the
+// TUI uses to render the input frame's left edge.
+func stripFramePrefix(line string) string {
+	t := line
+	for strings.HasPrefix(t, "│") || strings.HasPrefix(t, " ") || strings.HasPrefix(t, "\t") {
+		t = strings.TrimPrefix(t, "│")
+		t = strings.TrimLeft(t, " \t")
+		if len(t) == len(line) {
+			break
+		}
+		line = t
 	}
-	return 0, 0
+	return t
 }
 
 func dropEchoedPrompt(s, userPrompt string) string {
 	if userPrompt == "" {
 		return s
 	}
-	lines := strings.Split(s, "\n")
 	want := strings.TrimSpace(userPrompt)
+	if want == "" {
+		return s
+	}
+	wantLines := strings.Split(want, "\n")
+	for i := range wantLines {
+		wantLines[i] = strings.TrimSpace(wantLines[i])
+	}
+	lines := strings.Split(s, "\n")
 	out := make([]string, 0, len(lines))
 	for _, line := range lines {
 		t := strings.TrimSpace(line)
-		// Skip exact echoes of the user prompt and skip the conventional
-		// "> <prompt>" rendering.
-		if t == want || t == "> "+want || strings.TrimPrefix(t, "> ") == want {
+		match := false
+		// Single-line exact match
+		if t == want || t == "> "+want || t == "❯ "+want {
+			match = true
+		}
+		// Match any of the prompt's individual lines (handles multi-line prompts
+		// where each line appears separately in the rendering).
+		if !match {
+			for _, wl := range wantLines {
+				if wl != "" && t == wl {
+					match = true
+					break
+				}
+			}
+		}
+		if match {
 			continue
 		}
 		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
-
-// screenDiff returns the lines in after that aren't present (in order) at the
-// same trailing region of before. Crude but works as a fallback.
-func screenDiff(before, after string) string {
-	beforeSet := make(map[string]struct{})
-	for _, l := range strings.Split(before, "\n") {
-		beforeSet[strings.TrimSpace(l)] = struct{}{}
-	}
-	var out []string
-	for _, l := range strings.Split(after, "\n") {
-		if _, ok := beforeSet[strings.TrimSpace(l)]; ok {
-			continue
-		}
-		out = append(out, l)
 	}
 	return strings.Join(out, "\n")
 }
