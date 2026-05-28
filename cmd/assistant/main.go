@@ -56,9 +56,11 @@ func run(configPath string, logger *slog.Logger) error {
 
 	var wg sync.WaitGroup
 
+	stt := bridge.NewTranscriber(cfg.STT)
+
 	var tg *bridge.Telegram
 	if cfg.Telegram.Enabled() {
-		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound, cfg.Files.InboxDir)
+		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound, cfg.Files.InboxDir, stt)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -76,7 +78,7 @@ func run(configPath string, logger *slog.Logger) error {
 		if tg != nil {
 			sink = tg.SendQRToOwner
 		}
-		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink, cfg.Files.InboxDir)
+		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink, cfg.Files.InboxDir, stt)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

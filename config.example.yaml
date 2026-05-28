@@ -36,6 +36,15 @@ files:
   # Where files sent over chat are downloaded. Empty = ~/.local/share/assistant/inbox
   inbox_dir: ""
 
+stt:
+  # Transcribe voice/audio messages and feed the text in as the prompt.
+  # Requires a faster-whisper venv (see scripts/transcribe.py).
+  enabled: false
+  model: small # faster-whisper model: tiny/base/small/medium/large-v3
+  # Empty = ~/.local/share/assistant/stt-venv/bin/python and <workdir>/scripts/transcribe.py
+  python: ""
+  script: ""
+
 router:
   inbound_buffer: 32
   ready_idle_ms: 150

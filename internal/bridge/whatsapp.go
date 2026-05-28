@@ -59,7 +59,8 @@ type WhatsApp struct {
 	log      *slog.Logger
 	inbound  chan<- Inbound
 	qrSink   QRSink
-	inboxDir string // where sent files are downloaded
+	inboxDir string       // where sent files are downloaded
+	stt      *Transcriber // optional voice/audio transcription
 
 	allowed map[string]struct{} // bare sender phone numbers permitted to drive
 
@@ -77,12 +78,12 @@ type WhatsApp struct {
 	sentIDs map[string]struct{}
 }
 
-func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string) *WhatsApp {
+func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string, stt *Transcriber) *WhatsApp {
 	allow := make(map[string]struct{}, len(cfg.AllowedJIDs))
 	for _, j := range cfg.AllowedJIDs {
 		allow[strings.TrimSpace(j)] = struct{}{}
 	}
-	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
+	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, stt: stt, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
 }
 
 func (w *WhatsApp) Run(ctx context.Context) error {
@@ -171,6 +172,39 @@ func waMedia(m *waE2E.Message) (name, caption string, ok bool) {
 		return "sticker.webp", "", true
 	}
 	return "", "", false
+}
+
+// transcribeAudio downloads a WhatsApp voice/audio message, transcribes it, and
+// feeds the transcript in as the prompt (archiving the audio in the inbox).
+func (w *WhatsApp) transcribeAudio(msg *waE2E.Message, origin *waOrigin) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	data, err := w.client.DownloadAny(ctx, msg)
+	if err != nil {
+		w.log.Warn("whatsapp: audio download failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't download that audio: "+err.Error())
+		return
+	}
+	path, err := saveInbox(w.inboxDir, "whatsapp", "voice.ogg", data)
+	if err != nil {
+		w.log.Warn("whatsapp: saving audio failed", "err", err)
+	}
+	transcript, err := w.stt.Transcribe(ctx, path)
+	if err != nil {
+		w.log.Warn("whatsapp: transcription failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't transcribe that audio.")
+		return
+	}
+	if transcript == "" {
+		_ = origin.Reply(ctx, "🔇 I couldn't make out any speech in that audio.")
+		return
+	}
+	w.log.Info("whatsapp: transcribed audio", "chars", len(transcript))
+	select {
+	case w.inbound <- Inbound{Text: transcript, Origin: origin}:
+	default:
+		w.log.Warn("whatsapp: inbound buffer full, dropping transcript")
+	}
 }
 
 // saveMedia downloads a WhatsApp attachment to the inbox and enqueues a notice.
@@ -292,6 +326,13 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 		chat = w.client.Store.ID.ToNonAD()
 	}
 	origin := &waOrigin{bridge: w, chat: chat, sender: senderUser}
+
+	// Voice/audio? Transcribe and feed the text in as the prompt.
+	if w.stt.Enabled() && m.Message.GetAudioMessage() != nil {
+		w.log.Info("whatsapp: accepted audio for transcription", "self_chat", selfChat)
+		go w.transcribeAudio(m.Message, origin)
+		return
+	}
 
 	// File attachment? Download it (off the event goroutine) and notify the
 	// session with the saved path. Checked before the empty-text return since

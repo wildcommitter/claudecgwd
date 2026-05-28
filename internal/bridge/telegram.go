@@ -34,6 +34,7 @@ type Telegram struct {
 	bot      *bot.Bot
 	allowed  map[int64]struct{}
 	inboxDir string        // where sent files are downloaded
+	stt      *Transcriber  // optional voice/audio transcription
 	ready    chan struct{} // closed once bot is set, so QRSink can wait for startup
 
 	// Pending AskUserQuestion waiters, keyed by a per-question token embedded in
@@ -53,12 +54,12 @@ type tgWaiter struct {
 	done     bool         // guards single delivery
 }
 
-func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string) *Telegram {
+func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string, stt *Transcriber) *Telegram {
 	allow := make(map[int64]struct{}, len(cfg.AllowedUserIDs))
 	for _, id := range cfg.AllowedUserIDs {
 		allow[id] = struct{}{}
 	}
-	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
+	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, stt: stt, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
 }
 
 func (t *Telegram) Run(ctx context.Context) error {
@@ -98,7 +99,19 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 		replyToID: msg.ID,
 	}
 
-	// File attachment? Download it (off the update loop) and notify the session.
+	// Voice/audio? Transcribe it and feed the text in as the prompt.
+	if t.stt.Enabled() && (msg.Voice != nil || msg.Audio != nil) {
+		fileID, name := "", "voice.ogg"
+		if msg.Voice != nil {
+			fileID = msg.Voice.FileID
+		} else {
+			fileID, name = msg.Audio.FileID, "audio.mp3"
+		}
+		go t.transcribeAttachment(ctx, fileID, name, origin)
+		return
+	}
+
+	// Other attachment? Download it (off the update loop) and notify the session.
 	if fileID, name, ok := tgAttachment(msg); ok {
 		go t.saveAttachment(ctx, fileID, name, msg.Caption, origin)
 		return
@@ -159,6 +172,37 @@ func (t *Telegram) saveAttachment(ctx context.Context, fileID, name, caption str
 	case t.inbound <- Inbound{Text: text, Origin: origin}:
 	default:
 		t.log.Warn("telegram: inbound buffer full, dropping file notice")
+	}
+}
+
+// transcribeAttachment downloads a voice/audio file, transcribes it, and feeds
+// the transcript in as the prompt (archiving the audio in the inbox).
+func (t *Telegram) transcribeAttachment(ctx context.Context, fileID, name string, origin *tgOrigin) {
+	data, err := t.downloadFile(ctx, fileID)
+	if err != nil {
+		t.log.Warn("telegram: audio download failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't download that audio: "+err.Error())
+		return
+	}
+	path, err := saveInbox(t.inboxDir, "telegram", name, data)
+	if err != nil {
+		t.log.Warn("telegram: saving audio failed", "err", err)
+	}
+	transcript, err := t.stt.Transcribe(ctx, path)
+	if err != nil {
+		t.log.Warn("telegram: transcription failed", "err", err)
+		_ = origin.Reply(ctx, "⚠️  couldn't transcribe that audio.")
+		return
+	}
+	if transcript == "" {
+		_ = origin.Reply(ctx, "🔇 I couldn't make out any speech in that audio.")
+		return
+	}
+	t.log.Info("telegram: transcribed audio", "chars", len(transcript))
+	select {
+	case t.inbound <- Inbound{Text: transcript, Origin: origin}:
+	default:
+		t.log.Warn("telegram: inbound buffer full, dropping transcript")
 	}
 }
 
