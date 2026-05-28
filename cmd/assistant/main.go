@@ -73,7 +73,7 @@ func run(configPath string, logger *slog.Logger) error {
 		// Deliver the WhatsApp pairing QR through Telegram as a PNG.
 		var sink bridge.QRSink
 		if tg != nil {
-			sink = tg.SendPhotoToOwner
+			sink = tg.SendQRToOwner
 		}
 		wa := bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink)
 		wg.Add(1)

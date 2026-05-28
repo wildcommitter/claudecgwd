@@ -159,10 +159,12 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 	return nil
 }
 
-// SendPhotoToOwner sends a photo (e.g. a WhatsApp pairing QR) to the first
-// allowed user. Serves as a QRSink for the WhatsApp bridge. Waits briefly for
-// the bot to finish starting if called early.
-func (t *Telegram) SendPhotoToOwner(ctx context.Context, png []byte, caption string) error {
+// SendQRToOwner sends a QR image (e.g. a WhatsApp pairing code) to the first
+// allowed user as an uncompressed DOCUMENT. Telegram recompresses photos, which
+// blurs a dense QR enough that camera scanners fail — a document is delivered
+// byte-for-byte. Serves as the WhatsApp QRSink. Waits briefly for the bot to
+// finish starting if called early.
+func (t *Telegram) SendQRToOwner(ctx context.Context, png []byte, caption string) error {
 	select {
 	case <-t.ready:
 	case <-ctx.Done():
@@ -173,10 +175,10 @@ func (t *Telegram) SendPhotoToOwner(ctx context.Context, png []byte, caption str
 	if len(t.cfg.AllowedUserIDs) == 0 {
 		return fmt.Errorf("no allowed telegram users to send QR to")
 	}
-	_, err := t.bot.SendPhoto(ctx, &bot.SendPhotoParams{
-		ChatID:  t.cfg.AllowedUserIDs[0],
-		Photo:   &models.InputFileUpload{Filename: "whatsapp-qr.png", Data: bytes.NewReader(png)},
-		Caption: caption,
+	_, err := t.bot.SendDocument(ctx, &bot.SendDocumentParams{
+		ChatID:   t.cfg.AllowedUserIDs[0],
+		Document: &models.InputFileUpload{Filename: "whatsapp-qr.png", Data: bytes.NewReader(png)},
+		Caption:  caption,
 	})
 	return err
 }

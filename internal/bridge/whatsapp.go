@@ -122,7 +122,7 @@ func (w *WhatsApp) consumeQR(ctx context.Context, qrChan <-chan whatsmeow.QRChan
 	for evt := range qrChan {
 		switch evt.Event {
 		case "code":
-			png, err := qrcode.Encode(evt.Code, qrcode.Medium, 512)
+			png, err := qrcode.Encode(evt.Code, qrcode.Medium, 768)
 			if err != nil {
 				w.log.Error("whatsapp: qr encode failed", "err", err)
 				continue
