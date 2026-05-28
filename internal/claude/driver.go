@@ -159,20 +159,26 @@ func (d *Driver) Send(ctx context.Context, prompt string) (string, error) {
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
+	// Primary path: wait for the transcript to record a terminal stop_reason
+	// (end_turn / max_tokens / stop_sequence / refusal). The TUI returns to
+	// "ready" between tool calls too, so a TUI-only signal would slice the
+	// turn into fragments — only the transcript knows whether more is coming.
+	if d.transcript.path() != "" {
+		if reply, ok := d.transcript.waitForTurnComplete(ctx, transcriptOffset); ok {
+			return reply, nil
+		}
+		d.log.Warn("transcript did not reach terminal stop_reason; falling back to TUI scrape",
+			"transcript", d.transcript.describe())
+	}
+
+	// Fallback: TUI-based readiness + screen scrape. Only reached if the
+	// transcript can't be located or ctx expired before end_turn.
 	if err := d.waitForResponse(ctx); err != nil {
 		return "", fmt.Errorf("waiting for response: %w", err)
 	}
-
-	// Primary path: read the full reply from the session transcript. This is
-	// the authoritative text and is immune to the TUI scroll/scrape truncation
-	// that the screen snapshot suffers from.
 	if reply, ok := d.transcript.waitForReplySince(transcriptOffset, transcriptFlushWait); ok {
 		return reply, nil
 	}
-	d.log.Warn("transcript reply unavailable; falling back to screen scrape",
-		"transcript", d.transcript.describe())
-
-	// Fallback: scrape the screen (lossy for long/scrolled replies).
 	afterScreen := d.snapshotScreen()
 	d.dumpScreen("after", afterScreen)
 	return extractResponse(beforeScreen, afterScreen, prompt), nil

@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -67,9 +68,21 @@ func (t *transcriptReader) offset() int64 {
 type transcriptLine struct {
 	Type    string `json:"type"`
 	Message struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+		Role       string          `json:"role"`
+		Content    json.RawMessage `json:"content"`
+		StopReason string          `json:"stop_reason"`
 	} `json:"message"`
+}
+
+// terminalStopReason reports whether a stop_reason value means the turn is
+// fully done (no more streaming, no more tool calls). "tool_use" or empty
+// means more is coming; everything else is a final state for that turn.
+func terminalStopReason(r string) bool {
+	switch r {
+	case "end_turn", "max_tokens", "stop_sequence", "refusal":
+		return true
+	}
+	return false
 }
 
 // contentBlock is one element of an assistant message's content array.
@@ -148,6 +161,79 @@ func (t *transcriptReader) waitForReplySince(since int64, timeout time.Duration)
 			return "", false
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// replyAndState reads everything appended past `since` and returns the
+// concatenated assistant text plus the most recent assistant entry's
+// stop_reason. Intermediate text blocks (narration around tool calls) are
+// included so users see Claude's mid-turn commentary too.
+func (t *transcriptReader) replyAndState(since int64) (text string, lastStopReason string, hasAny bool) {
+	p := t.path()
+	if p == "" {
+		return "", "", false
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "", "", false
+	}
+	defer f.Close()
+	if since > 0 {
+		if _, err := f.Seek(since, 0); err != nil {
+			return "", "", false
+		}
+	}
+	var parts []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var rec transcriptLine
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		if rec.Type != "assistant" || rec.Message.Role != "assistant" {
+			continue
+		}
+		hasAny = true
+		var blocks []contentBlock
+		if err := json.Unmarshal(rec.Message.Content, &blocks); err != nil {
+			continue
+		}
+		for _, b := range blocks {
+			if b.Type == "text" {
+				if txt := strings.TrimSpace(b.Text); txt != "" {
+					parts = append(parts, txt)
+				}
+			}
+		}
+		if rec.Message.StopReason != "" {
+			lastStopReason = rec.Message.StopReason
+		}
+	}
+	text = strings.Join(parts, "\n\n")
+	return text, lastStopReason, hasAny
+}
+
+// waitForTurnComplete polls the transcript until the most recent assistant
+// entry past `since` has a terminal stop_reason (turn fully done). Returns
+// the concatenated reply text. If ctx is cancelled before a terminal reason
+// is observed, returns whatever text exists with ok=false.
+func (t *transcriptReader) waitForTurnComplete(ctx context.Context, since int64) (string, bool) {
+	const poll = 150 * time.Millisecond
+	for {
+		text, reason, _ := t.replyAndState(since)
+		if terminalStopReason(reason) {
+			return text, true
+		}
+		select {
+		case <-ctx.Done():
+			return text, false
+		case <-time.After(poll):
+		}
 	}
 }
 
