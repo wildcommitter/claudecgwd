@@ -34,7 +34,9 @@ func main() {
 	}
 
 	args := []string{"--session-id", *session, "--dangerously-skip-permissions"}
-	sessFile := filepath.Join(os.Getenv("HOME"), ".claude", "sessions", *session+".json")
+	absWorkdir, _ := filepath.Abs(*workdir)
+	slug := strings.ReplaceAll(absWorkdir, "/", "-")
+	sessFile := filepath.Join(os.Getenv("HOME"), ".claude", "projects", slug, *session+".jsonl")
 	if _, err := os.Stat(sessFile); err == nil {
 		args = []string{"--resume", *session, "--dangerously-skip-permissions"}
 	}

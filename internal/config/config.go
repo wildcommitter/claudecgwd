@@ -83,7 +83,7 @@ func (c *Config) applyDefaults() {
 		c.Claude.PtyCols = 200
 	}
 	if c.Claude.PtyRows == 0 {
-		c.Claude.PtyRows = 60
+		c.Claude.PtyRows = 500
 	}
 	if c.Router.InboundBuffer == 0 {
 		c.Router.InboundBuffer = 32

@@ -5,7 +5,7 @@ claude:
   session_id: REPLACE-WITH-UUID
   permission_mode: bypassPermissions
   pty_cols: 200
-  pty_rows: 60
+  pty_rows: 500
   # Optional extra args passed to `claude`, e.g. ["--model", "opus"]
   extra_args: []
 

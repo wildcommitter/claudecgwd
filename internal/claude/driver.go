@@ -27,7 +27,17 @@ import (
 const (
 	startupTimeout = 60 * time.Second
 	pollInterval   = 50 * time.Millisecond
-	defaultIdleMs  = 200
+	// How long the PTY must be quiet (no bytes written) before we consider a
+	// ready/busy classification reliable. Claude streams in bursts with gaps;
+	// too-short a window triggers in the middle of a stream.
+	defaultIdleMs = 800
+	// After detecting "first ready" on startup, give the TUI this much
+	// additional time to render one-time hints / announcements before we
+	// snapshot the screen for the first user turn.
+	startupSettle = 2 * time.Second
+	// Phase 1 of waitForResponse waits up to this long to observe the busy
+	// state appearing. If Claude responds instantly we accept that.
+	phase1Timeout = 5 * time.Second
 )
 
 // Driver owns a single long-lived `claude` PTY session.
@@ -83,6 +93,13 @@ func (d *Driver) Start(ctx context.Context) error {
 	defer cancel()
 	if err := d.waitReady(startCtx); err != nil {
 		return fmt.Errorf("waiting for first ready prompt: %w", err)
+	}
+	// Let the TUI render any one-time announcements (e.g. "Opus 4.X is here",
+	// "Tip: ...") before the first user turn snapshots the screen.
+	select {
+	case <-time.After(startupSettle):
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 	d.log.Info("claude ready")
 	return nil
@@ -202,7 +219,6 @@ func (d *Driver) waitReady(ctx context.Context) error {
 //  2. Once busy was observed, wait for the busy markers to clear AND the
 //     screen to be idle AND the prompt anchor to be visible.
 func (d *Driver) waitForResponse(ctx context.Context) error {
-	const phase1Timeout = 3 * time.Second
 	idle := time.Duration(defaultIdleMs) * time.Millisecond
 
 	phase1Deadline := time.Now().Add(phase1Timeout)
@@ -390,12 +406,15 @@ var (
 	separatorRe = regexp.MustCompile(`^\s*[─━═╌╍-]{3,}\s*$`)
 	// matches the persistent bottom hint line (different from transient status)
 	bottomHintRe = regexp.MustCompile(`(?i)(shift\+tab to cycle|bypass permissions on)`)
-	// busyMarkerRe matches a line that indicates the TUI is *currently busy*.
-	// Critically excludes ✻/✶/✢ which are used for post-hoc "Cogitated for Xs"
-	// completion markers, and excludes past-tense verbs.
-	// Real busy markers: present-participle verbs, "esc to interrupt", or a
-	// braille/middle-dot spinner followed by a present-participle.
-	busyMarkerRe = regexp.MustCompile(`(?i)(esc to interrupt|\b(?:pondering|thinking|working|crunching|cooking|brewing|mulling|simmering|propagating|synthesizing|brainstorming|deliberating|musing|ruminating|considering|reasoning|reflecting|computing|analyzing|generating|processing|cogitating|loading|reading|searching|exploring|planning|writing|preparing|fetching|gathering|reviewing|inspecting|investigating)\b)`)
+	// busyMarkerRe matches a *line* that strongly indicates the TUI is
+	// currently busy. Two acceptable patterns:
+	//   1. "esc to interrupt"      — the cancel hint claude shows while busy
+	//   2. <spinner> <verb-ing>... — e.g. "· Propagating…", "⠋ Pondering..."
+	// The verbs are intentionally NOT matched alone (Claude's response text
+	// often contains words like "working", "reading", "planning") and the
+	// spinner charset intentionally excludes ✻/✶/✢ which are post-hoc
+	// completion markers like "✻ Cogitated for 2s".
+	busyMarkerRe = regexp.MustCompile(`(?i)(esc to interrupt|^\s*[·•⠁⠂⠄⡀⢀⠠⠐⠈⠉⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+(?:pondering|thinking|working|crunching|cooking|brewing|mulling|simmering|propagating|synthesizing|brainstorming|deliberating|musing|ruminating|considering|reasoning|reflecting|computing|analyzing|generating|processing|cogitating|loading|reading|searching|exploring|planning|writing|preparing|fetching|gathering|reviewing|inspecting|investigating)\b)`)
 	// assistantPrefixRe strips the leading "● " marker the TUI uses to label
 	// assistant message lines.
 	assistantPrefixRe = regexp.MustCompile(`^\s*●\s+`)

@@ -74,6 +74,38 @@ func TestDropEchoedPrompt_Multiline(t *testing.T) {
 	}
 }
 
+func TestBusyMarkerRe_DoesNotMatchContentWords(t *testing.T) {
+	// Claude's response text often contains words like "working", "reading",
+	// "planning". These must NOT trigger busy detection — only the TUI status
+	// line format (spinner + present-participle, or "esc to interrupt") does.
+	notBusy := []string{
+		"there are uncommitted tweaks in the working tree",
+		"Reading the file should be fine",
+		"  planning to commit later",
+		"✻ Cogitated for 2s",
+		"✻ Brewed for 18s",
+		"⏵⏵ bypass permissions on (shift+tab to cycle)",
+		"● Going well 👋",
+		"  ⎿  diff --git a/foo b/foo",
+	}
+	for _, line := range notBusy {
+		if busyMarkerRe.MatchString(line) {
+			t.Errorf("busyMarkerRe wrongly matched non-busy line: %q", line)
+		}
+	}
+	busy := []string{
+		"· Propagating…",
+		"⠋ Pondering for 5s",
+		"Press esc to interrupt",
+		"⠙ Working... (3s)",
+	}
+	for _, line := range busy {
+		if !busyMarkerRe.MatchString(line) {
+			t.Errorf("busyMarkerRe missed actual busy line: %q", line)
+		}
+	}
+}
+
 func TestIsBoxedFrameLine(t *testing.T) {
 	cases := map[string]bool{
 		"╭────────╮":  true,
