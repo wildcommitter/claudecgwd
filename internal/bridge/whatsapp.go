@@ -219,8 +219,14 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 	if text == "" {
 		return
 	}
-	w.log.Info("whatsapp: accepted message", "self_chat", selfChat, "from_me", m.Info.IsFromMe)
+	// Reply target: for the self-chat, send to our own phone-number JID (the
+	// visible "Message Yourself" thread) rather than the @lid the event came in
+	// on — replies to the @lid don't surface in that chat on the phone.
 	chat := m.Info.Chat
+	if selfChat && w.client.Store.ID != nil {
+		chat = w.client.Store.ID.ToNonAD()
+	}
+	w.log.Info("whatsapp: accepted message", "self_chat", selfChat, "from_me", m.Info.IsFromMe, "reply_to", chat.String())
 
 	// Route to a pending interactive-question waiter if one is active.
 	w.amu.Lock()
@@ -318,8 +324,10 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 	for i, chunk := range chunks {
 		resp, err := o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
 		if err != nil {
+			o.bridge.log.Warn("whatsapp: send failed", "to", o.chat.String(), "err", err)
 			return fmt.Errorf("whatsapp send: %w", err)
 		}
+		o.bridge.log.Info("whatsapp: sent reply", "to", o.chat.String(), "id", string(resp.ID), "chunk", i+1)
 		o.bridge.markSent(string(resp.ID)) // so the echo of our own reply is ignored
 		if i+1 < len(chunks) {
 			time.Sleep(150 * time.Millisecond)
