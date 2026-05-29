@@ -39,11 +39,11 @@ gcal find --query <text> [--days N]    # search upcoming events
 
 ## Notes
 
-- Requires the service-account JSON (`$GCAL_CREDENTIALS`, default
-  `~/.config/assistant/gcal-sa.json`) and the calendar shared with the service
-  account's `client_email`. `$GCAL_CALENDAR` is the calendar ID (the user's
-  Gmail for a personal calendar).
-- If `gcal` reports credentials missing, tell the user the calendar isn't set up
-  yet and point them at the service-account steps — don't guess event data.
+- Auth is OAuth as the user: a one-time `scripts/gcal-auth` (browser consent)
+  stores a refresh token; `gcal` refreshes silently after. `$GCAL_CALENDAR`
+  defaults to `primary` (the user's own calendar) — no sharing needed.
+- If `gcal` says "not authorized yet — run scripts/gcal-auth", the calendar
+  isn't set up; tell the user to run that once (it's interactive, opens a
+  browser) — don't guess event data.
 - A morning-agenda routine pairs well with this: `scripts/routine add "daily 08:00"
   "Post my calendar agenda for today"`.

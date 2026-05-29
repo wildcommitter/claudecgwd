@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# One-time Google Calendar OAuth consent — run this interactively (it opens a
+# browser). Saves a refresh token the bridge then uses silently.
+#
+#   scripts/gcal-auth
+#
+# Env: GCAL_VENV, GCAL_OAUTH_CLIENT (default ~/.config/assistant/gcal-oauth.json),
+# GCAL_TOKEN (default ~/.config/assistant/gcal-token.json).
+
+set -euo pipefail
+
+VENV="${GCAL_VENV:-$HOME/.local/share/assistant/gcal-venv}"
+here="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ ! -x "$VENV/bin/python" ]]; then
+  echo "gcal venv missing at $VENV (run scripts/setup-gcal.sh)" >&2
+  exit 1
+fi
+
+exec "$VENV/bin/python" "$here/gcal-auth.py" "$@"

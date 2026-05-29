@@ -16,6 +16,6 @@ fi
 
 echo "==> installing google calendar client"
 "$VENV/bin/pip" install -q -U pip
-"$VENV/bin/pip" install -q google-api-python-client google-auth
+"$VENV/bin/pip" install -q google-api-python-client google-auth google-auth-oauthlib
 
 echo "done: gcal venv ready at $VENV"

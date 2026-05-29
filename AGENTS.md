@@ -39,7 +39,7 @@ internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
 internal/config config.go (single Config struct, yaml)
 scripts/        install.sh, watch-ci.sh, notify.sh, send-file, remind, routine,
                 remember, transcribe.py, rag / setup-rag.sh, tts / setup-tts.sh,
-                gcal / gcal.py / setup-gcal.sh (Google Calendar)
+                gcal / gcal.py / gcal-auth / setup-gcal.sh (Google Calendar)
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
 .claude/skills/ project skills (received-files, project-tracker, rag-search,
@@ -97,12 +97,13 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   `Auto-detect` entry, `AutoVoice()`), the spoken voice follows the *reply's*
   detected language (`detectVoiceLanguage` via whatlanggo) — so a Spanish answer
   is spoken by a Spanish voice; a pinned `/speech <lang>` forces one instead.
-- **Google Calendar** (`scripts/gcal`, the `calendar` skill): read agenda /
-  create / find events via a service account (no Go code — the agent shells to
-  the script, like rag/tts). Auth is the SA JSON at `$GCAL_CREDENTIALS`
-  (default `~/.config/assistant/gcal-sa.json`) against `$GCAL_CALENDAR`; the
-  calendar must be shared with the SA's `client_email`. Falls back to a clear
-  "not set up" error when creds are absent.
+- **Google Calendar** (`scripts/gcal`, `scripts/gcal-auth`, the `calendar`
+  skill): read agenda / create / find events (no Go code — the agent shells to
+  the script, like rag/tts). Auth is OAuth as the user: `gcal-auth` runs a
+  one-time browser consent and stores a refresh token (`$GCAL_TOKEN`) from the
+  Desktop OAuth client JSON (`$GCAL_OAUTH_CLIENT`); `gcal` refreshes silently.
+  `$GCAL_CALENDAR` defaults to `primary`. Falls back to a clear "run gcal-auth"
+  error when unauthorized.
 - **Persistent memory** (`memory.go`, `scripts/remember`, the `memory` skill):
   durable user facts in a markdown store, prepended to the first prompt of each
   session via `Router.withMemory` (keyed off `SessionController.Generation()` so

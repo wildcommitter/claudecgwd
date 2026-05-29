@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Google Calendar helper (service-account auth).
+"""Google Calendar helper (OAuth user auth).
 
 Subcommands:
   agenda [--days N]                      list upcoming events (default 7 days)
@@ -7,10 +7,11 @@ Subcommands:
                                          create an event (naive ISO = local tz)
   find --query Q [--days N]              search upcoming events by text
 
-Auth: a service-account JSON key at $GCAL_CREDENTIALS (default
-~/.config/assistant/gcal-sa.json). The target calendar is $GCAL_CALENDAR
-(default "primary"); for a shared personal calendar that's your Gmail address.
-Share the calendar with the service account's client_email first.
+Auth: OAuth as the user. scripts/gcal-auth runs the one-time browser consent and
+stores a refresh token at $GCAL_TOKEN (default ~/.config/assistant/gcal-token.json)
+from the OAuth client JSON at $GCAL_OAUTH_CLIENT (default
+~/.config/assistant/gcal-oauth.json). Access tokens refresh silently here.
+$GCAL_CALENDAR is the calendar id ("primary" = your own main calendar).
 
 Run via the gcal venv's interpreter (see the scripts/gcal wrapper).
 """
@@ -19,20 +20,36 @@ import datetime
 import os
 import sys
 
-CRED = os.environ.get("GCAL_CREDENTIALS", os.path.expanduser("~/.config/assistant/gcal-sa.json"))
+TOKEN = os.environ.get("GCAL_TOKEN", os.path.expanduser("~/.config/assistant/gcal-token.json"))
 CAL = os.environ.get("GCAL_CALENDAR", "primary")
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
 def service():
-    if not os.path.exists(CRED):
-        print(f"google calendar credentials not found at {CRED} "
-              f"(set GCAL_CREDENTIALS or drop the service-account JSON there)", file=sys.stderr)
-        sys.exit(1)
-    from google.oauth2 import service_account
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
     from googleapiclient.discovery import build
-    creds = service_account.Credentials.from_service_account_file(CRED, scopes=SCOPES)
+
+    if not os.path.exists(TOKEN):
+        print("google calendar not authorized yet — run scripts/gcal-auth once "
+              "to grant access (opens a browser).", file=sys.stderr)
+        sys.exit(1)
+    creds = Credentials.from_authorized_user_file(TOKEN, SCOPES)
+    if not creds.valid:
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            _save_token(creds)
+        else:
+            print("google calendar authorization is invalid/expired — re-run "
+                  "scripts/gcal-auth.", file=sys.stderr)
+            sys.exit(1)
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+
+def _save_token(creds):
+    with open(TOKEN, "w") as f:
+        f.write(creds.to_json())
+    os.chmod(TOKEN, 0o600)
 
 
 def local_tz():
