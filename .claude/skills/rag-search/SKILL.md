@@ -50,15 +50,16 @@ snippets, no synthesis); you don't need to invoke it — it's the bridge command
 
 ## Keeping the index fresh
 
-- The index is incremental: indexed inbox files are skipped; transcripts are
-  read forward from a saved cursor, so only new turns get embedded.
-- **After a new attachment arrives** (a `[file received …]` / `[image received …]`
-  notice), run `scripts/rag index --scope attachments` so it's searchable.
-- To pick up recent conversation turns before a recall query, a quick
-  `scripts/rag index` first keeps results current.
-- A full first index can take a while (it embeds everything). Run long indexes
-  in the background and, when done, notify via `scripts/notify.sh` rather than
-  assuming a completion message will reach the user.
+- **Indexing is automatic.** The bridge's auto-indexer re-runs `rag index` on a
+  ticker (new conversation turns) and is poked the instant a file is saved (new
+  attachments), so you normally don't need to index by hand. It's incremental:
+  indexed inbox files are skipped and transcripts are read forward from a saved
+  cursor, so only new content gets embedded.
+- You can still run `scripts/rag index` manually to force a refresh right before
+  a recall query if you want to be certain the very latest turn is in.
+- A full *first* index can take a while (it embeds everything). Run long manual
+  indexes in the background and, when done, notify via `scripts/notify.sh`
+  rather than assuming a completion message will reach the user.
 
 ## Notes
 

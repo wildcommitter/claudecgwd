@@ -31,12 +31,13 @@ type Telegram struct {
 	log     *slog.Logger
 	inbound chan<- Inbound
 
-	bot       *bot.Bot
-	allowed   map[int64]struct{}
-	inboxDir  string        // where sent files are downloaded
-	stt       *Transcriber  // optional voice/audio transcription
-	ready     chan struct{} // closed once bot is set, so QRSink can wait for startup
-	readyOnce sync.Once     // guards the ready close across bridge restarts
+	bot          *bot.Bot
+	allowed      map[int64]struct{}
+	inboxDir     string        // where sent files are downloaded
+	stt          *Transcriber  // optional voice/audio transcription
+	indexTrigger func()        // optional: poke the RAG auto-indexer after a file save
+	ready        chan struct{} // closed once bot is set, so QRSink can wait for startup
+	readyOnce    sync.Once     // guards the ready close across bridge restarts
 
 	// Pending AskUserQuestion waiters, keyed by a per-question token embedded in
 	// inline-button callback data.
@@ -55,12 +56,19 @@ type tgWaiter struct {
 	done     bool         // guards single delivery
 }
 
-func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string, stt *Transcriber) *Telegram {
+func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string, stt *Transcriber, indexTrigger func()) *Telegram {
 	allow := make(map[int64]struct{}, len(cfg.AllowedUserIDs))
 	for _, id := range cfg.AllowedUserIDs {
 		allow[id] = struct{}{}
 	}
-	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, stt: stt, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
+	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, stt: stt, indexTrigger: indexTrigger, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
+}
+
+// fireIndex pokes the auto-indexer (if wired) after a file is saved.
+func (t *Telegram) fireIndex() {
+	if t.indexTrigger != nil {
+		t.indexTrigger()
+	}
 }
 
 func (t *Telegram) Run(ctx context.Context) error {
@@ -178,6 +186,7 @@ func (t *Telegram) saveAttachment(ctx context.Context, fileID, name, caption str
 		return
 	}
 	t.log.Info("telegram: saved incoming file", "path", path, "bytes", len(data), "image", isImage)
+	t.fireIndex() // make the new attachment searchable right away
 	text := receivedNotice("telegram", path, caption, isImage)
 	select {
 	case t.inbound <- Inbound{Text: text, Origin: origin}:

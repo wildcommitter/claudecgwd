@@ -71,9 +71,21 @@ func run(configPath string, logger *slog.Logger) error {
 
 	stt := bridge.NewTranscriber(cfg.STT)
 
+	// Auto-indexer: keeps the RAG index fresh (ticker for conversations, plus an
+	// immediate poke when a file arrives). Only runs if the embeddings venv is
+	// set up; bridges fire its trigger after saving an attachment.
+	var indexer *bridge.Indexer
+	var indexTrigger func()
+	if bridge.RAGVenvReady() {
+		indexer = bridge.NewIndexer(ragCmd, time.Duration(cfg.RAG.IndexIntervalS)*time.Second, logger.With("component", "indexer"))
+		indexTrigger = indexer.Trigger
+	} else {
+		logger.Info("rag venv not found; auto-indexer disabled")
+	}
+
 	var tg *bridge.Telegram
 	if cfg.Telegram.Enabled() {
-		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound, cfg.Files.InboxDir, stt)
+		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound, cfg.Files.InboxDir, stt, indexTrigger)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -88,11 +100,19 @@ func run(configPath string, logger *slog.Logger) error {
 		if tg != nil {
 			sink = tg.SendQRToOwner
 		}
-		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink, cfg.Files.InboxDir, stt)
+		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink, cfg.Files.InboxDir, stt, indexTrigger)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			superviseBridge(ctx, "whatsapp", logger, wa.Run)
+		}()
+	}
+
+	if indexer != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = indexer.Run(ctx)
 		}()
 	}
 

@@ -57,10 +57,11 @@ type QRSink func(ctx context.Context, png []byte, caption string) error
 type WhatsApp struct {
 	cfg      config.WhatsAppConfig
 	log      *slog.Logger
-	inbound  chan<- Inbound
-	qrSink   QRSink
-	inboxDir string       // where sent files are downloaded
-	stt      *Transcriber // optional voice/audio transcription
+	inbound      chan<- Inbound
+	qrSink       QRSink
+	inboxDir     string       // where sent files are downloaded
+	stt          *Transcriber // optional voice/audio transcription
+	indexTrigger func()       // optional: poke the RAG auto-indexer after a file save
 
 	allowed map[string]struct{} // bare sender phone numbers permitted to drive
 
@@ -78,12 +79,19 @@ type WhatsApp struct {
 	sentIDs map[string]struct{}
 }
 
-func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string, stt *Transcriber) *WhatsApp {
+func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string, stt *Transcriber, indexTrigger func()) *WhatsApp {
 	allow := make(map[string]struct{}, len(cfg.AllowedJIDs))
 	for _, j := range cfg.AllowedJIDs {
 		allow[strings.TrimSpace(j)] = struct{}{}
 	}
-	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, stt: stt, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
+	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, stt: stt, indexTrigger: indexTrigger, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
+}
+
+// fireIndex pokes the auto-indexer (if wired) after a file is saved.
+func (w *WhatsApp) fireIndex() {
+	if w.indexTrigger != nil {
+		w.indexTrigger()
+	}
 }
 
 func (w *WhatsApp) Run(ctx context.Context) error {
@@ -225,6 +233,7 @@ func (w *WhatsApp) saveMedia(msg *waE2E.Message, name, caption string, isImage b
 		return
 	}
 	w.log.Info("whatsapp: saved incoming file", "path", path, "bytes", len(data), "image", isImage)
+	w.fireIndex() // make the new attachment searchable right away
 	text := receivedNotice("whatsapp", path, caption, isImage)
 	select {
 	case w.inbound <- Inbound{Text: text, Origin: origin}:

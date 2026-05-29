@@ -15,7 +15,16 @@ type Config struct {
 	Files     FilesConfig     `yaml:"files"`
 	STT       STTConfig       `yaml:"stt"`
 	Reminders RemindersConfig `yaml:"reminders"`
+	RAG       RAGConfig       `yaml:"rag"`
 	Router    RouterConfig    `yaml:"router"`
+}
+
+type RAGConfig struct {
+	// IndexIntervalS is how often the auto-indexer re-scans for new
+	// conversation turns. The indexer runs automatically whenever the local
+	// embeddings venv is present; new attachments also trigger it immediately.
+	// 0 = default (120s).
+	IndexIntervalS int `yaml:"index_interval_s"`
 }
 
 type RemindersConfig struct {
@@ -128,6 +137,9 @@ func (c *Config) applyDefaults() {
 		if c.STT.Command == "" {
 			c.STT.Command = filepath.Join(c.Claude.Workdir, "scripts", "transcribe")
 		}
+	}
+	if c.RAG.IndexIntervalS == 0 {
+		c.RAG.IndexIntervalS = 120
 	}
 	if c.Router.InboundBuffer == 0 {
 		c.Router.InboundBuffer = 32

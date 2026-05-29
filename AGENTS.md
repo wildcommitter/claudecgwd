@@ -85,7 +85,10 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   `~/.local/share/assistant/rag/index.db`). `/search <query>` returns raw ranked
   snippets (router shells to `scripts/rag query`); the `rag-search` skill is the
   auto-retrieval side — query the index mid-turn and synthesize. Indexing is
-  incremental (immutable inbox files skipped; transcripts read from a cursor).
+  incremental (immutable inbox files skipped; transcripts read from a cursor)
+  and **automatic**: the `Indexer` (`indexer.go`) re-runs `rag index` on a
+  ticker and is poked immediately when a file is saved, so manual `rag index`
+  is rarely needed. It only runs when the embeddings venv is present.
 - **Proactive notifications:** a reply only reaches the user on an inbound
   turn. To push unprompted (e.g. a finished background job), write to the
   notify FIFO via `scripts/notify.sh "msg"` — the Notifier fans it out to all
