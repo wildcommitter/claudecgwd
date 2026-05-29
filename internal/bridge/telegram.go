@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ type Telegram struct {
 	allowed      map[int64]struct{}
 	inboxDir     string        // where sent files are downloaded
 	stt          *Transcriber  // optional voice/audio transcription
+	voice        *VoiceOut     // optional spoken (voice-note) replies
 	indexTrigger func()        // optional: poke the RAG auto-indexer after a file save
 	ready        chan struct{} // closed once bot is set, so QRSink can wait for startup
 	readyOnce    sync.Once     // guards the ready close across bridge restarts
@@ -56,12 +58,12 @@ type tgWaiter struct {
 	done     bool         // guards single delivery
 }
 
-func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string, stt *Transcriber, indexTrigger func()) *Telegram {
+func NewTelegram(cfg config.TelegramConfig, log *slog.Logger, inbound chan<- Inbound, inboxDir string, stt *Transcriber, voice *VoiceOut, indexTrigger func()) *Telegram {
 	allow := make(map[int64]struct{}, len(cfg.AllowedUserIDs))
 	for _, id := range cfg.AllowedUserIDs {
 		allow[id] = struct{}{}
 	}
-	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, stt: stt, indexTrigger: indexTrigger, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
+	return &Telegram{cfg: cfg, log: log, inbound: inbound, allowed: allow, inboxDir: inboxDir, stt: stt, voice: voice, indexTrigger: indexTrigger, ready: make(chan struct{}), waiters: map[string]*tgWaiter{}}
 }
 
 // fireIndex pokes the auto-indexer (if wired) after a file is saved.
@@ -108,7 +110,8 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 		replyToID: msg.ID,
 	}
 
-	// Voice/audio? Transcribe it and feed the text in as the prompt.
+	// Voice/audio? Transcribe it and feed the text in as the prompt. Mark the
+	// origin so the reply mirrors back as a voice note (in auto mode).
 	if t.stt.Enabled() && (msg.Voice != nil || msg.Audio != nil) {
 		fileID, name := "", "voice.ogg"
 		if msg.Voice != nil {
@@ -116,6 +119,7 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 		} else {
 			fileID, name = msg.Audio.FileID, "audio.mp3"
 		}
+		origin.voiceIn = true
 		go t.transcribeAttachment(ctx, fileID, name, origin)
 		return
 	}
@@ -253,6 +257,7 @@ type tgOrigin struct {
 	userID    int64
 	username  string
 	replyToID int
+	voiceIn   bool       // the triggering message was a voice note (→ mirror with a spoken reply)
 	mu        sync.Mutex // serializes Replies on the same origin
 }
 
@@ -317,6 +322,14 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 	if strings.TrimSpace(text) == "" {
 		text = "(empty response)"
 	}
+	// Spoken reply when the policy says so; fall back to text on any failure.
+	if o.bridge.voice.Enabled() && o.bridge.voice.Policy.ShouldSpeak(o.voiceIn, text) {
+		if err := o.replyVoice(ctx, text); err == nil {
+			return nil
+		} else {
+			o.bridge.log.Warn("telegram: voice reply failed; sending text", "err", err)
+		}
+	}
 	chunks := chunkText(text, tgMaxChars)
 	for i, chunk := range chunks {
 		params := &bot.SendMessageParams{
@@ -338,6 +351,31 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 		}
 	}
 	return nil
+}
+
+// replyVoice synthesizes text to an OGG/Opus note and sends it as a Telegram
+// voice message. The caller holds o.mu.
+func (o *tgOrigin) replyVoice(ctx context.Context, text string) error {
+	path, err := o.bridge.voice.Synth.Synthesize(ctx, text)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	params := &bot.SendVoiceParams{
+		ChatID: o.chatID,
+		Voice:  &models.InputFileUpload{Filename: "reply.ogg", Data: bytes.NewReader(data)},
+	}
+	if o.replyToID != 0 {
+		params.ReplyParameters = &models.ReplyParameters{MessageID: o.replyToID}
+	}
+	return withRetry(ctx, o.bridge.log, "telegram voice", func(actx context.Context) error {
+		_, e := o.bridge.bot.SendVoice(actx, params)
+		return e
+	})
 }
 
 // SendTextToOwner pushes a proactive text message to the first allowed user.

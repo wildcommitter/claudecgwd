@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	qrcode "github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
@@ -61,6 +62,7 @@ type WhatsApp struct {
 	qrSink       QRSink
 	inboxDir     string       // where sent files are downloaded
 	stt          *Transcriber // optional voice/audio transcription
+	voice        *VoiceOut    // optional spoken (voice-note) replies
 	indexTrigger func()       // optional: poke the RAG auto-indexer after a file save
 
 	allowed map[string]struct{} // bare sender phone numbers permitted to drive
@@ -79,12 +81,12 @@ type WhatsApp struct {
 	sentIDs map[string]struct{}
 }
 
-func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string, stt *Transcriber, indexTrigger func()) *WhatsApp {
+func NewWhatsApp(cfg config.WhatsAppConfig, log *slog.Logger, inbound chan<- Inbound, qrSink QRSink, inboxDir string, stt *Transcriber, voice *VoiceOut, indexTrigger func()) *WhatsApp {
 	allow := make(map[string]struct{}, len(cfg.AllowedJIDs))
 	for _, j := range cfg.AllowedJIDs {
 		allow[strings.TrimSpace(j)] = struct{}{}
 	}
-	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, stt: stt, indexTrigger: indexTrigger, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
+	return &WhatsApp{cfg: cfg, log: log, inbound: inbound, qrSink: qrSink, inboxDir: inboxDir, stt: stt, voice: voice, indexTrigger: indexTrigger, allowed: allow, pendingAns: map[string]chan string{}, sentIDs: map[string]struct{}{}}
 }
 
 // fireIndex pokes the auto-indexer (if wired) after a file is saved.
@@ -345,6 +347,7 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 	// Voice/audio? Transcribe and feed the text in as the prompt.
 	if w.stt.Enabled() && m.Message.GetAudioMessage() != nil {
 		w.log.Info("whatsapp: accepted audio for transcription", "self_chat", selfChat)
+		origin.voiceIn = true // mirror back as a voice note (in auto mode)
 		go w.transcribeAudio(m.Message, origin)
 		return
 	}
@@ -428,9 +431,10 @@ func (w *WhatsApp) askQuestion(ctx context.Context, o *waOrigin, q claude.Questi
 
 // waOrigin is the reply target for one WhatsApp chat.
 type waOrigin struct {
-	bridge *WhatsApp
-	chat   types.JID
-	sender string
+	bridge  *WhatsApp
+	chat    types.JID
+	sender  string
+	voiceIn bool // the triggering message was a voice note (→ mirror with a spoken reply)
 }
 
 func (o *waOrigin) Describe() string { return fmt.Sprintf("whatsapp(%s)", o.sender) }
@@ -480,6 +484,14 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 	if strings.TrimSpace(text) == "" {
 		text = "(empty response)"
 	}
+	// Spoken reply when the policy says so; fall back to text on any failure.
+	if o.bridge.voice.Enabled() && o.bridge.voice.Policy.ShouldSpeak(o.voiceIn, text) {
+		if err := o.replyVoice(ctx, text); err == nil {
+			return nil
+		} else {
+			o.bridge.log.Warn("whatsapp: voice reply failed; sending text", "err", err)
+		}
+	}
 	// WhatsApp tolerates long messages, but keep chunks reasonable.
 	chunks := chunkText(text, 4000)
 	for i, chunk := range chunks {
@@ -499,6 +511,48 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 			time.Sleep(150 * time.Millisecond)
 		}
 	}
+	return nil
+}
+
+// replyVoice synthesizes text to an OGG/Opus note, uploads it, and sends it as a
+// WhatsApp voice message (PTT). Falls back to text via the caller on error.
+func (o *waOrigin) replyVoice(ctx context.Context, text string) error {
+	path, err := o.bridge.voice.Synth.Synthesize(ctx, text)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	up, err := o.bridge.client.Upload(ctx, data, whatsmeow.MediaAudio)
+	if err != nil {
+		return fmt.Errorf("whatsapp audio upload: %w", err)
+	}
+	seconds := uint32(utf8.RuneCountInString(text)/15 + 1) // rough spoken length
+	fileLen := uint64(len(data))
+	msg := &waE2E.Message{AudioMessage: &waE2E.AudioMessage{
+		URL:           proto.String(up.URL),
+		DirectPath:    proto.String(up.DirectPath),
+		MediaKey:      up.MediaKey,
+		FileEncSHA256: up.FileEncSHA256,
+		FileSHA256:    up.FileSHA256,
+		FileLength:    &fileLen,
+		Mimetype:      proto.String("audio/ogg; codecs=opus"),
+		PTT:           proto.Bool(true),
+		Seconds:       &seconds,
+	}}
+	var resp whatsmeow.SendResponse
+	err = withRetry(ctx, o.bridge.log, "whatsapp voice", func(actx context.Context) error {
+		var e error
+		resp, e = o.bridge.client.SendMessage(actx, o.chat, msg)
+		return e
+	})
+	if err != nil {
+		return err
+	}
+	o.bridge.markSent(string(resp.ID))
 	return nil
 }
 

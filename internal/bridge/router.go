@@ -34,17 +34,18 @@ type Router struct {
 	driver     Sender
 	ctl        SessionController
 	projects   *ProjectRegistry
-	ragCmd     string // path to scripts/rag for the /search command ("" disables it)
+	voice      *VoiceOut // for the /voice command ("" disables it)
+	ragCmd     string    // path to scripts/rag for the /search command ("" disables it)
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
 }
 
-func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
+func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, voice *VoiceOut, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, ctl: ctl, projects: projects, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget}
+	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget}
 }
 
 func (r *Router) Run(ctx context.Context) error {
@@ -149,6 +150,7 @@ const controlHelp = "Session commands:\n" +
 	"/project <name|dir> — switch project (name is wildcard-matched against tracked projects)\n" +
 	"/projects — list tracked project directories\n" +
 	"/search <query> — semantic search over attachments + past conversations\n" +
+	"/voice <on|off|auto> — spoken replies: always / never / mirror voice notes\n" +
 	"/status — show the current project and session\n" +
 	"/help — this message"
 
@@ -167,7 +169,7 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "projects", "search", "status", "help":
+	case "new", "project", "projects", "search", "voice", "status", "help":
 		return name, arg, true
 	}
 	return "", "", false
@@ -235,6 +237,23 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 			return
 		}
 		r.handleSearch(ctx, reply, arg)
+	case "voice":
+		if !r.voice.Enabled() {
+			reply("Voice replies aren't enabled.")
+			return
+		}
+		if arg == "" {
+			reply("🔊 Voice replies are " + r.voice.Policy.Mode().String() +
+				". Use /voice on (always), off (never), or auto (mirror voice notes).")
+			return
+		}
+		m, ok := parseVoiceMode(arg)
+		if !ok {
+			reply("Usage: /voice <on|off|auto>")
+			return
+		}
+		r.voice.Policy.Set(m)
+		reply("🔊 Voice replies set to " + m.String() + ".")
 	case "projects":
 		if r.projects == nil {
 			reply("Project tracking isn't enabled.")

@@ -57,10 +57,18 @@ func run(configPath string, logger *slog.Logger) error {
 	// workdir so it keeps working after a /project switch moves the session.
 	ragCmd := filepath.Join(cfg.Claude.Workdir, "scripts", "rag")
 
+	// Spoken (voice-note) replies: nil-safe bundle of the synthesizer + the
+	// live policy that /voice toggles. Disabled cleanly when tts.enabled is off.
+	voice := &bridge.VoiceOut{
+		Synth:  bridge.NewSynthesizer(cfg.TTS),
+		Policy: bridge.NewVoicePolicy(cfg.TTS.Mode),
+	}
+
 	router := bridge.NewRouter(
 		driver,
 		driver, // also the SessionController for /new, /project, /status
 		projects,
+		voice,
 		ragCmd,
 		inbound,
 		logger.With("component", "router"),
@@ -85,7 +93,7 @@ func run(configPath string, logger *slog.Logger) error {
 
 	var tg *bridge.Telegram
 	if cfg.Telegram.Enabled() {
-		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound, cfg.Files.InboxDir, stt, indexTrigger)
+		tg = bridge.NewTelegram(cfg.Telegram, logger.With("component", "telegram"), inbound, cfg.Files.InboxDir, stt, voice, indexTrigger)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -100,7 +108,7 @@ func run(configPath string, logger *slog.Logger) error {
 		if tg != nil {
 			sink = tg.SendQRToOwner
 		}
-		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink, cfg.Files.InboxDir, stt, indexTrigger)
+		wa = bridge.NewWhatsApp(cfg.WhatsApp, logger.With("component", "whatsapp"), inbound, sink, cfg.Files.InboxDir, stt, voice, indexTrigger)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

@@ -14,9 +14,23 @@ type Config struct {
 	WhatsApp WhatsAppConfig `yaml:"whatsapp"`
 	Files     FilesConfig     `yaml:"files"`
 	STT       STTConfig       `yaml:"stt"`
+	TTS       TTSConfig       `yaml:"tts"`
 	Reminders RemindersConfig `yaml:"reminders"`
 	RAG       RAGConfig       `yaml:"rag"`
 	Router    RouterConfig    `yaml:"router"`
+}
+
+type TTSConfig struct {
+	// Enabled turns spoken (voice-note) replies on.
+	Enabled bool `yaml:"enabled"`
+	// Mode is when to speak: auto (only when the user sent a voice note),
+	// always, or off. Runtime-toggleable with /voice.
+	Mode string `yaml:"mode"`
+	// Voice is the piper voice model name (e.g. en_US-amy-medium).
+	Voice string `yaml:"voice"`
+	// Command is the synthesis entrypoint, called as `<command> <out.ogg>` with
+	// the text on stdin. Defaults to <workdir>/scripts/tts.
+	Command string `yaml:"command"`
 }
 
 type RAGConfig struct {
@@ -136,6 +150,17 @@ func (c *Config) applyDefaults() {
 		}
 		if c.STT.Command == "" {
 			c.STT.Command = filepath.Join(c.Claude.Workdir, "scripts", "transcribe")
+		}
+	}
+	if c.TTS.Enabled {
+		if c.TTS.Mode == "" {
+			c.TTS.Mode = "auto"
+		}
+		if c.TTS.Voice == "" {
+			c.TTS.Voice = "en_US-amy-medium"
+		}
+		if c.TTS.Command == "" {
+			c.TTS.Command = filepath.Join(c.Claude.Workdir, "scripts", "tts")
 		}
 	}
 	if c.RAG.IndexIntervalS == 0 {
