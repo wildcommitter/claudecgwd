@@ -418,17 +418,43 @@ type waOrigin struct {
 
 func (o *waOrigin) Describe() string { return fmt.Sprintf("whatsapp(%s)", o.sender) }
 
-// NotifyPending shows a "typing…" presence, re-armed periodically until done.
+// NotifyPending keeps a "typing…" presence alive and, if the turn outlasts
+// heartbeatDelay, posts a one-line textual nudge so the user knows Claude isn't
+// stuck. The nudge is revoked once ctx is cancelled (turn over). Revoking
+// leaves WhatsApp's "this message was deleted" tombstone — minor, and still
+// cleaner than a stale "working…" line lingering in the chat.
 func (o *waOrigin) NotifyPending(ctx context.Context) {
-	t := time.NewTicker(8 * time.Second)
-	defer t.Stop()
-	for {
+	presence := time.NewTicker(8 * time.Second)
+	defer presence.Stop()
+	heartbeat := time.NewTimer(heartbeatDelay)
+	defer heartbeat.Stop()
+
+	arm := func() {
 		_ = o.bridge.client.SendChatPresence(ctx, o.chat, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+	}
+
+	var heartbeatID types.MessageID
+	arm() // first presence ping immediately
+	for {
 		select {
 		case <-ctx.Done():
 			_ = o.bridge.client.SendChatPresence(context.Background(), o.chat, types.ChatPresencePaused, types.ChatPresenceMediaText)
+			if heartbeatID != "" {
+				// ctx is already cancelled, so revoke on a fresh,
+				// short-lived context of our own.
+				delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, _ = o.bridge.client.RevokeMessage(delCtx, o.chat, heartbeatID)
+				cancel()
+			}
 			return
-		case <-t.C:
+		case <-presence.C:
+			arm()
+		case <-heartbeat.C:
+			resp, err := o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(heartbeatText)})
+			if err == nil {
+				heartbeatID = resp.ID
+				o.bridge.markSent(string(resp.ID)) // ignore the echo of our own nudge
+			}
 		}
 	}
 }
