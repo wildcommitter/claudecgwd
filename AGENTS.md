@@ -56,6 +56,12 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
 - **Surfaces implement `bridge.Origin`** (Describe / NotifyPending / Reply /
   AskChoices) and run as a `bridge.Bridge`. To add a surface, implement those
   and wire it in `cmd/assistant`.
+- **Control commands** (`/new`, `/project <dir>`, `/status`, `/help`) are
+  intercepted by the router (`parseControl`) and never reach Claude; unknown
+  slash text passes through. They drive the `SessionController` (the
+  `claude.Driver`): `/new` restarts with a fresh session id, `/project`
+  restarts in a new workdir. The driver distinguishes an intentional restart
+  (`stopping` flag) from a crash, so only a real child exit closes `Done()`.
 - **WhatsApp** uses whatsmeow (linked-device). The operator drives it from the
   "Message Yourself" chat (detected by `chat == sender`); replies go to the
   phone-number self-JID; the bot tracks its own sent IDs to avoid reply loops.

@@ -49,6 +49,7 @@ func run(configPath string, logger *slog.Logger) error {
 
 	router := bridge.NewRouter(
 		driver,
+		driver, // also the SessionController for /new, /project, /status
 		inbound,
 		logger.With("component", "router"),
 		time.Duration(cfg.Router.WatchdogTimeoutS)*time.Second,

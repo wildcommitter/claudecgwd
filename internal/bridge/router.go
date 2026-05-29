@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/wildcommitter/claudecgwd/internal/claude"
@@ -18,18 +19,29 @@ type Sender interface {
 	Send(ctx context.Context, prompt string, ask claude.ChoiceAsker) (string, error)
 }
 
+// SessionController lets chat control commands (/new, /project, /status)
+// reconfigure the live Claude session. The concrete claude.Driver implements
+// it; it is optional (nil disables the commands), which keeps the router
+// testable with a bare Sender stub.
+type SessionController interface {
+	NewSession(ctx context.Context) (string, error)
+	SwitchProject(ctx context.Context, dir string) (string, error)
+	Info() (workdir, sessionID string)
+}
+
 type Router struct {
 	driver     Sender
+	ctl        SessionController
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
 }
 
-func NewRouter(driver Sender, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
+func NewRouter(driver Sender, ctl SessionController, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, inbound: inbound, log: log, turnBudget: turnBudget}
+	return &Router{driver: driver, ctl: ctl, inbound: inbound, log: log, turnBudget: turnBudget}
 }
 
 func (r *Router) Run(ctx context.Context) error {
@@ -49,6 +61,17 @@ func (r *Router) Run(ctx context.Context) error {
 
 func (r *Router) handle(ctx context.Context, msg Inbound) {
 	tag := msg.Origin.Describe()
+
+	// Bridge-level control commands (/new, /project, …) are handled here and
+	// never reach Claude. Unknown slash text falls through as a normal prompt.
+	if r.ctl != nil {
+		if name, arg, ok := parseControl(msg.Text); ok {
+			r.log.Info("control command", "origin", tag, "cmd", name)
+			r.handleControl(ctx, msg, name, arg)
+			return
+		}
+	}
+
 	r.log.Info("handling message", "origin", tag, "len", len(msg.Text))
 
 	// Tag the prompt so Claude knows where it came from. This is plain text
@@ -106,5 +129,71 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	}
 	if err := msg.Origin.Reply(ctx, reply); err != nil {
 		r.log.Error("reply failed", "err", err, "origin", tag)
+	}
+}
+
+// controlHelp lists the bridge commands and is shown by /help.
+const controlHelp = "Session commands:\n" +
+	"/new — start a fresh conversation (clears context)\n" +
+	"/project <dir> — switch to another project dir (fresh conversation there)\n" +
+	"/status — show the current project and session\n" +
+	"/help — this message"
+
+// parseControl recognizes a bridge-level control command. It returns the
+// command name (without slash, lower-cased) and any trailing argument. ok is
+// false for non-commands and for unknown slash text (which is passed to Claude
+// so its own slash commands still work).
+func parseControl(text string) (name, arg string, ok bool) {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "/") {
+		return "", "", false
+	}
+	fields := strings.SplitN(t, " ", 2)
+	name = strings.ToLower(strings.TrimPrefix(fields[0], "/"))
+	if len(fields) == 2 {
+		arg = strings.TrimSpace(fields[1])
+	}
+	switch name {
+	case "new", "project", "status", "help":
+		return name, arg, true
+	}
+	return "", "", false
+}
+
+// handleControl executes a control command and replies on the origin.
+func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg string) {
+	reply := func(text string) {
+		if err := msg.Origin.Reply(ctx, text); err != nil {
+			r.log.Error("control reply failed", "err", err, "cmd", name)
+		}
+	}
+	switch name {
+	case "help":
+		reply(controlHelp)
+	case "status":
+		wd, sid := r.ctl.Info()
+		reply(fmt.Sprintf("📋 Project: %s\nSession: %s", wd, sid))
+	case "new":
+		sid, err := r.ctl.NewSession(ctx)
+		if err != nil {
+			r.log.Error("new session failed", "err", err)
+			reply("⚠️  couldn't start a new session: " + err.Error())
+			return
+		}
+		r.log.Info("started new session", "session", sid)
+		reply("🆕 Fresh conversation started — the previous context is cleared.")
+	case "project":
+		if arg == "" {
+			reply("Usage: /project <dir>  (e.g. /project myrepo or /project ~/code/foo)")
+			return
+		}
+		wd, err := r.ctl.SwitchProject(ctx, arg)
+		if err != nil {
+			r.log.Warn("switch project failed", "err", err, "arg", arg)
+			reply("⚠️  couldn't switch project: " + err.Error())
+			return
+		}
+		r.log.Info("switched project", "workdir", wd)
+		reply("📂 Switched to " + wd + " — fresh conversation here.")
 	}
 }

@@ -5,6 +5,7 @@ package claude
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -57,14 +59,22 @@ type Driver struct {
 	// JSONL, sidestepping the lossy TUI screen-scrape.
 	transcript *transcriptReader
 
-	// sendMu serializes Send calls so only one prompt is in flight.
+	// sendMu serializes Send calls (and session restarts) so only one prompt is
+	// in flight and a restart never races a send.
 	sendMu sync.Mutex
 
 	// stateMu guards lastWriteAt.
 	stateMu     sync.Mutex
 	lastWriteAt time.Time
 
-	done chan struct{}
+	// done is closed exactly once, when the driver is permanently finished —
+	// either Close() or an *unexpected* child exit. An intentional restart (a
+	// /new or /project command) tears the child down with stopping=true so it
+	// is not mistaken for a crash.
+	done      chan struct{}
+	doneOnce  sync.Once
+	stopping  atomic.Bool
+	childDone chan struct{} // closed when the current child's Wait() returns
 }
 
 // New constructs a Driver. Call Start to spawn the child.
@@ -99,8 +109,14 @@ func (d *Driver) Start(ctx context.Context) error {
 	d.ptyFile = f
 	d.term = vt10x.New(vt10x.WithSize(int(d.cfg.PtyCols), int(d.cfg.PtyRows)))
 
-	go d.readLoop()
-	go d.waitLoop()
+	// Each child reads its own pty into its own terminal, so a restart's old
+	// reader (still draining the closed pty) can't write into the new child's
+	// screen. The shared d.ptyFile/d.term fields are only mutated here and in
+	// restart, both under sendMu.
+	childDone := make(chan struct{})
+	d.childDone = childDone
+	go d.readLoop(f, d.term)
+	go d.waitChild(d.cmd, childDone)
 
 	startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
@@ -118,22 +134,91 @@ func (d *Driver) Start(ctx context.Context) error {
 	return nil
 }
 
-// Done is closed when the underlying claude process exits.
+// Done is closed when the driver is permanently finished — Close() or an
+// unexpected child exit. Intentional restarts do not close it.
 func (d *Driver) Done() <-chan struct{} { return d.done }
 
-// Close terminates the claude child.
+// signalDone closes the done channel at most once.
+func (d *Driver) signalDone() { d.doneOnce.Do(func() { close(d.done) }) }
+
+// Close terminates the claude child for good.
 func (d *Driver) Close() error {
+	d.sendMu.Lock()
+	defer d.sendMu.Unlock()
+	d.stopping.Store(true)
+	d.teardownChild()
+	d.signalDone()
+	return nil
+}
+
+// teardownChild stops the current claude child and waits for its Wait() to
+// return. Callers must hold sendMu and set d.stopping appropriately first.
+func (d *Driver) teardownChild() {
 	if d.cmd == nil || d.cmd.Process == nil {
-		return nil
+		return
 	}
-	// Try graceful first.
-	_, _ = d.ptyFile.Write([]byte{0x03}) // Ctrl-C
+	_, _ = d.ptyFile.Write([]byte{0x03}) // Ctrl-C: ask the TUI to exit cleanly
 	time.Sleep(200 * time.Millisecond)
 	_ = d.cmd.Process.Kill()
 	if d.ptyFile != nil {
-		_ = d.ptyFile.Close()
+		_ = d.ptyFile.Close() // unblocks the child's readLoop
 	}
-	return nil
+	if d.childDone != nil {
+		<-d.childDone // wait for Wait() before the driver is reused
+	}
+}
+
+// NewSession tears down the current child and starts a fresh conversation in
+// the same workdir (a new session id). Returns the new session id.
+func (d *Driver) NewSession(ctx context.Context) (string, error) {
+	id, err := newSessionID()
+	if err != nil {
+		return "", err
+	}
+	if err := d.restart(ctx, d.cfg.Workdir, id); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// SwitchProject restarts the session in a different working directory — a fresh
+// conversation, since Claude Code sessions are per-project. The directory is
+// validated before the running child is torn down, so a bad path leaves the
+// current session intact.
+func (d *Driver) SwitchProject(ctx context.Context, dir string) (string, error) {
+	abs, err := resolveWorkdir(dir)
+	if err != nil {
+		return "", err
+	}
+	id, err := newSessionID()
+	if err != nil {
+		return "", err
+	}
+	if err := d.restart(ctx, abs, id); err != nil {
+		return "", err
+	}
+	return abs, nil
+}
+
+// Info reports the current workdir and session id. Called from the router's
+// single goroutine, serialized against restarts by that same goroutine.
+func (d *Driver) Info() (workdir, sessionID string) {
+	return d.cfg.Workdir, d.cfg.SessionID
+}
+
+// restart swaps the live session to a new workdir/session id by tearing the
+// current child down and spawning a fresh one. stopping is raised across the
+// teardown so the exiting child isn't treated as a crash.
+func (d *Driver) restart(ctx context.Context, workdir, sessionID string) error {
+	d.sendMu.Lock()
+	defer d.sendMu.Unlock()
+	d.stopping.Store(true)
+	d.teardownChild()
+	d.cfg.Workdir = workdir
+	d.cfg.SessionID = sessionID
+	d.transcript = newTranscriptReader(sessionID, workdir)
+	d.stopping.Store(false)
+	return d.Start(ctx)
 }
 
 // Send writes prompt into the TUI, waits for the next ready-prompt, and
@@ -412,16 +497,19 @@ func (d *Driver) sessionExists() bool {
 	return err == nil
 }
 
-func (d *Driver) readLoop() {
+// readLoop drains one child's pty into that child's terminal. f and term are
+// captured per-child so a restarted driver's old reader can't write into the
+// new child's screen.
+func (d *Driver) readLoop(f *os.File, term vt10x.Terminal) {
 	buf := make([]byte, 8192)
 	for {
-		n, err := d.ptyFile.Read(buf)
+		n, err := f.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			d.stateMu.Lock()
 			d.lastWriteAt = time.Now()
 			d.stateMu.Unlock()
-			d.term.Write(chunk)
+			term.Write(chunk)
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrClosed) {
@@ -432,9 +520,55 @@ func (d *Driver) readLoop() {
 	}
 }
 
-func (d *Driver) waitLoop() {
-	_ = d.cmd.Wait()
-	close(d.done)
+// waitChild reaps one child. An exit only signals the driver as permanently
+// done when it wasn't an intentional teardown (Close / restart).
+func (d *Driver) waitChild(cmd *exec.Cmd, childDone chan struct{}) {
+	_ = cmd.Wait()
+	close(childDone)
+	if !d.stopping.Load() {
+		d.signalDone()
+	}
+}
+
+// newSessionID returns a fresh random UUIDv4 string for claude's --session-id.
+func newSessionID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("session id: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+// resolveWorkdir normalizes a user-supplied project path (absolute, ~-relative,
+// or relative to $HOME) and verifies it is an existing directory.
+func resolveWorkdir(dir string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", errors.New("no directory given")
+	}
+	home, _ := os.UserHomeDir()
+	switch {
+	case dir == "~":
+		dir = home
+	case strings.HasPrefix(dir, "~/"):
+		dir = filepath.Join(home, dir[2:])
+	case !filepath.IsAbs(dir):
+		dir = filepath.Join(home, dir)
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("cannot access %s: %w", abs, err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", abs)
+	}
+	return abs, nil
 }
 
 // --- response extraction --------------------------------------------------
