@@ -57,8 +57,9 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
 - **Surfaces implement `bridge.Origin`** (Describe / NotifyPending / Reply /
   AskChoices) and run as a `bridge.Bridge`. To add a surface, implement those
   and wire it in `cmd/assistant`.
-- **Control commands** (`/new`, `/project <name|dir>`, `/projects`, `/status`,
-  `/help`) are intercepted by the router (`parseControl`) and never reach
+- **Control commands** (`/new`, `/project <name|dir>`, `/projects`, `/search`,
+  `/voice`, `/speech`, `/status`, `/health`, `/help`) are intercepted by the
+  router (`parseControl`) and never reach
   Claude; unknown slash text passes through. They drive the `SessionController`
   (the `claude.Driver`): `/new` restarts with a fresh session id, `/project`
   restarts in a new workdir. The driver distinguishes an intentional restart

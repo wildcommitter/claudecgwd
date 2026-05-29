@@ -59,6 +59,7 @@ the TUI parse is only a fallback.
 | `/voice <on\|off\|auto>` | Spoken replies: always / never / mirror voice notes |
 | `/speech <language\|country>` | Set the audio language (transcription + voice); voices download on demand |
 | `/status` | Show the current project and session |
+| `/health` | Uptime + a snapshot of the bridge's state |
 | `/help` | List these commands |
 
 Unknown slash text is passed through to Claude untouched.

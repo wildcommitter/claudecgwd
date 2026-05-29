@@ -132,6 +132,17 @@ func TestRouterControlCommands(t *testing.T) {
 		}
 	})
 
+	t.Run("/health reports a snapshot", func(t *testing.T) {
+		o := &captureOrigin{}
+		r.handle(ctx, Inbound{Text: "/health", Origin: o})
+		if len(o.replies) != 1 ||
+			!strings.Contains(o.replies[0], "Health") ||
+			!strings.Contains(o.replies[0], "Uptime") ||
+			!strings.Contains(o.replies[0], "/home/user/proj") {
+			t.Fatalf("expected a health snapshot, got %v", o.replies)
+		}
+	})
+
 	t.Run("/search with no rag configured is reported, not run", func(t *testing.T) {
 		o := &captureOrigin{}
 		r.handle(ctx, Inbound{Text: "/search anything", Origin: o})

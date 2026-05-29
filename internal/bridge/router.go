@@ -39,13 +39,14 @@ type Router struct {
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
+	started    time.Time
 }
 
 func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, voice *VoiceOut, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget}
+	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget, started: time.Now()}
 }
 
 func (r *Router) Run(ctx context.Context) error {
@@ -153,6 +154,7 @@ const controlHelp = "Session commands:\n" +
 	"/voice <on|off|auto> — spoken replies: always / never / mirror voice notes\n" +
 	"/speech <language|country> — set the audio language (transcription + voice)\n" +
 	"/status — show the current project and session\n" +
+	"/health — uptime + a snapshot of the bridge's state\n" +
 	"/help — this message"
 
 // parseControl recognizes a bridge-level control command. It returns the
@@ -170,7 +172,7 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "projects", "search", "voice", "speech", "status", "help":
+	case "new", "project", "projects", "search", "voice", "speech", "status", "health", "help":
 		return name, arg, true
 	}
 	return "", "", false
@@ -206,6 +208,36 @@ func (r *Router) handleSearch(ctx context.Context, reply func(string), query str
 	reply("🔎 Results for \"" + query + "\":\n\n" + text)
 }
 
+// healthReport assembles a one-shot snapshot of the bridge's state.
+func (r *Router) healthReport(ctx context.Context) string {
+	var b strings.Builder
+	b.WriteString("🩺 Health\n")
+	fmt.Fprintf(&b, "Uptime: %s\n", time.Since(r.started).Round(time.Second))
+	if r.ctl != nil {
+		wd, sid := r.ctl.Info()
+		fmt.Fprintf(&b, "Project: %s\nSession: %s\n", wd, sid)
+	}
+	if r.voice != nil && r.voice.Lang != nil {
+		fmt.Fprintf(&b, "Audio language: %s\n", r.voice.Lang.Current().Name)
+	}
+	if r.voice != nil && r.voice.Policy != nil {
+		voice := "off (no TTS engine)"
+		if r.voice.Enabled() {
+			voice = r.voice.Policy.Mode().String()
+		}
+		fmt.Fprintf(&b, "Voice replies: %s\n", voice)
+	}
+	if r.ragCmd != "" {
+		cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		out, err := exec.CommandContext(cctx, r.ragCmd, "stats").CombinedOutput()
+		cancel()
+		if err == nil {
+			b.WriteString("RAG index — " + strings.ReplaceAll(strings.TrimSpace(string(out)), "\n", "; ") + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // handleControl executes a control command and replies on the origin.
 func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg string) {
 	reply := func(text string) {
@@ -219,6 +251,8 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 	case "status":
 		wd, sid := r.ctl.Info()
 		reply(fmt.Sprintf("📋 Project: %s\nSession: %s", wd, sid))
+	case "health":
+		reply(r.healthReport(ctx))
 	case "new":
 		sid, err := r.ctl.NewSession(ctx)
 		if err != nil {
