@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Transcribe an audio file to text with faster-whisper; print the transcript.
 
-Usage: transcribe.py <audio-file> [model]
+Usage: transcribe.py <audio-file> [model] [language]
+
+The whisper models are multilingual; <language> is an optional ISO-639-1 hint
+(e.g. es, fr, de). Empty or omitted = auto-detect.
 
 Run with the STT venv's interpreter
 (~/.local/share/assistant/stt-venv/bin/python). The model is downloaded and
@@ -13,15 +16,16 @@ import sys
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("usage: transcribe.py <audio-file> [model]", file=sys.stderr)
+        print("usage: transcribe.py <audio-file> [model] [language]", file=sys.stderr)
         return 2
     audio = sys.argv[1]
     model_name = sys.argv[2] if len(sys.argv) > 2 else "small"
+    language = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3].strip() else None
 
     from faster_whisper import WhisperModel
 
     model = WhisperModel(model_name, device="cpu", compute_type="int8")
-    segments, _info = model.transcribe(audio, vad_filter=True)
+    segments, _info = model.transcribe(audio, vad_filter=True, language=language)
     text = " ".join(seg.text.strip() for seg in segments).strip()
     sys.stdout.write(text)
     return 0

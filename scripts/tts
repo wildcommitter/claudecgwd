@@ -22,6 +22,27 @@ if [[ ! -x "$VENV/bin/piper" ]]; then
   exit 1
 fi
 
+# Download the voice model on demand if it isn't already present (so switching
+# language via /speech just works). Voice name <lang>-<name>-<quality> maps to
+# the piper-voices repo path <lang>/<region>/<name>/<quality>/<voice>.onnx.
+mkdir -p "$VOICES_DIR"
+if [[ ! -f "$VOICES_DIR/$VOICE.onnx" ]]; then
+  region="${VOICE%%-*}"        # en_US
+  lang="${region%%_*}"         # en
+  rest="${VOICE#*-}"           # amy-medium
+  name="${rest%%-*}"           # amy
+  quality="${rest#*-}"         # medium
+  base="https://huggingface.co/rhasspy/piper-voices/resolve/main/${lang}/${region}/${name}/${quality}/${VOICE}"
+  echo "downloading voice $VOICE…" >&2
+  for ext in onnx onnx.json; do
+    curl -fsSL --retry 2 "$base.$ext" -o "$VOICES_DIR/$VOICE.$ext" || {
+      echo "voice download failed: $VOICE.$ext" >&2
+      rm -f "$VOICES_DIR/$VOICE.onnx" "$VOICES_DIR/$VOICE.onnx.json"
+      exit 1
+    }
+  done
+fi
+
 wav="$(mktemp --suffix=.wav)"
 trap 'rm -f "$wav"' EXIT
 
