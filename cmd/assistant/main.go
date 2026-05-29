@@ -47,9 +47,15 @@ func run(configPath string, logger *slog.Logger) error {
 
 	inbound := make(chan bridge.Inbound, cfg.Router.InboundBuffer)
 
+	// Tracks project directories across /project switches so a name can be
+	// wildcard-resolved later (paired with the project-tracker skill). Uses the
+	// default store path (~/.local/share/assistant/projects.tsv).
+	projects := bridge.NewProjectRegistry("")
+
 	router := bridge.NewRouter(
 		driver,
 		driver, // also the SessionController for /new, /project, /status
+		projects,
 		inbound,
 		logger.With("component", "router"),
 		time.Duration(cfg.Router.WatchdogTimeoutS)*time.Second,

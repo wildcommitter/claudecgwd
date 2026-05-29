@@ -35,12 +35,12 @@ internal/claude driver.go (PTY + vt10x), transcript.go (read replies from
                 ~/.claude/projects/<slug>/<session>.jsonl), interactive.go
                 (AskUserQuestion handling)
 internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
-                files.go, stt.go, types.go (Origin/Bridge/Inbound interfaces)
+                projects.go, files.go, stt.go, types.go (Origin/Bridge/Inbound)
 internal/config config.go (single Config struct, yaml)
 scripts/        install.sh, watch-ci.sh, notify.sh, remind, transcribe.py
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
-.claude/skills/ project skills (e.g. received-files)
+.claude/skills/ project skills (received-files, project-tracker)
 ```
 
 ## Architecture & invariants
@@ -56,12 +56,18 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
 - **Surfaces implement `bridge.Origin`** (Describe / NotifyPending / Reply /
   AskChoices) and run as a `bridge.Bridge`. To add a surface, implement those
   and wire it in `cmd/assistant`.
-- **Control commands** (`/new`, `/project <dir>`, `/status`, `/help`) are
-  intercepted by the router (`parseControl`) and never reach Claude; unknown
-  slash text passes through. They drive the `SessionController` (the
-  `claude.Driver`): `/new` restarts with a fresh session id, `/project`
+- **Control commands** (`/new`, `/project <name|dir>`, `/projects`, `/status`,
+  `/help`) are intercepted by the router (`parseControl`) and never reach
+  Claude; unknown slash text passes through. They drive the `SessionController`
+  (the `claude.Driver`): `/new` restarts with a fresh session id, `/project`
   restarts in a new workdir. The driver distinguishes an intentional restart
   (`stopping` flag) from a crash, so only a real child exit closes `Done()`.
+- **Project tracking:** every `/project` switch and the startup workdir are
+  recorded in a shared registry (`projects.go`, TSV at
+  `~/.local/share/assistant/projects.tsv`). `/project <name>` wildcard-resolves
+  a bare name against it (a path with `/` or `~` is literal); `/projects` lists
+  it. The `project-tracker` skill is the conversational/shell side over the same
+  file — use it when the user names a project loosely.
 - **WhatsApp** uses whatsmeow (linked-device). The operator drives it from the
   "Message Yourself" chat (detected by `chat == sender`); replies go to the
   phone-number self-JID; the bot tracks its own sent IDs to avoid reply loops.

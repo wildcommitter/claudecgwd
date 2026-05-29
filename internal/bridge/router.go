@@ -32,20 +32,29 @@ type SessionController interface {
 type Router struct {
 	driver     Sender
 	ctl        SessionController
+	projects   *ProjectRegistry
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
 }
 
-func NewRouter(driver Sender, ctl SessionController, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
+func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, ctl: ctl, inbound: inbound, log: log, turnBudget: turnBudget}
+	return &Router{driver: driver, ctl: ctl, projects: projects, inbound: inbound, log: log, turnBudget: turnBudget}
 }
 
 func (r *Router) Run(ctx context.Context) error {
 	r.log.Info("router started", "turn_budget", r.turnBudget)
+	// Seed the registry with the starting project so it's tracked even before
+	// the first /project switch.
+	if r.projects != nil && r.ctl != nil {
+		wd, _ := r.ctl.Info()
+		if err := r.projects.Record(wd); err != nil {
+			r.log.Warn("project record failed", "dir", wd, "err", err)
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -135,7 +144,8 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 // controlHelp lists the bridge commands and is shown by /help.
 const controlHelp = "Session commands:\n" +
 	"/new — start a fresh conversation (clears context)\n" +
-	"/project <dir> — switch to another project dir (fresh conversation there)\n" +
+	"/project <name|dir> — switch project (name is wildcard-matched against tracked projects)\n" +
+	"/projects — list tracked project directories\n" +
 	"/status — show the current project and session\n" +
 	"/help — this message"
 
@@ -154,10 +164,16 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "status", "help":
+	case "new", "project", "projects", "status", "help":
 		return name, arg, true
 	}
 	return "", "", false
+}
+
+// looksLikePath reports whether arg should be treated as a literal directory
+// path rather than a project-name pattern to wildcard-match.
+func looksLikePath(arg string) bool {
+	return strings.ContainsAny(arg, "/~") || arg == "." || arg == ".."
 }
 
 // handleControl executes a control command and replies on the origin.
@@ -182,16 +198,54 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 		}
 		r.log.Info("started new session", "session", sid)
 		reply("🆕 Fresh conversation started — the previous context is cleared.")
-	case "project":
-		if arg == "" {
-			reply("Usage: /project <dir>  (e.g. /project myrepo or /project ~/code/foo)")
+	case "projects":
+		if r.projects == nil {
+			reply("Project tracking isn't enabled.")
 			return
 		}
-		wd, err := r.ctl.SwitchProject(ctx, arg)
+		list := r.projects.List()
+		if len(list) == 0 {
+			reply("No tracked projects yet.")
+			return
+		}
+		reply("📚 Tracked projects (most recent first):\n" + strings.Join(list, "\n"))
+	case "project":
+		if arg == "" {
+			reply("Usage: /project <name|dir>  (e.g. /project bridge, /project myrepo, /project ~/code/foo)")
+			return
+		}
+		target := arg
+		// Wildcard-resolve a bare name against tracked projects by default; an
+		// explicit path (contains / or ~) is taken literally.
+		if r.projects != nil && !looksLikePath(arg) {
+			matches := r.projects.Resolve(arg)
+			switch {
+			case len(matches) == 1:
+				target = matches[0]
+			case len(matches) > 1:
+				reply("🔎 Several tracked projects match \"" + arg + "\":\n" +
+					strings.Join(matches, "\n") + "\n\nRe-run /project with a more specific name or a full path.")
+				return
+				// len 0: fall through with target=arg so a real dir name under
+				// $HOME still resolves via SwitchProject.
+			}
+		}
+		wd, err := r.ctl.SwitchProject(ctx, target)
 		if err != nil {
 			r.log.Warn("switch project failed", "err", err, "arg", arg)
-			reply("⚠️  couldn't switch project: " + err.Error())
+			hint := ""
+			if r.projects != nil && !looksLikePath(arg) {
+				if list := r.projects.List(); len(list) > 0 {
+					hint = "\n\nTracked projects:\n" + strings.Join(list, "\n")
+				}
+			}
+			reply("⚠️  couldn't switch project: " + err.Error() + hint)
 			return
+		}
+		if r.projects != nil {
+			if err := r.projects.Record(wd); err != nil {
+				r.log.Warn("project record failed", "dir", wd, "err", err)
+			}
 		}
 		r.log.Info("switched project", "workdir", wd)
 		reply("📂 Switched to " + wd + " — fresh conversation here.")

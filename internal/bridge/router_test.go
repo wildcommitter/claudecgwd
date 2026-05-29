@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -50,6 +51,7 @@ func (s *stubSender) Send(_ context.Context, prompt string, _ claude.ChoiceAsker
 
 type stubController struct {
 	newCalls   int
+	switchArg  string // raw dir passed to SwitchProject
 	switchedTo string
 	switchErr  error
 }
@@ -59,10 +61,17 @@ func (c *stubController) NewSession(context.Context) (string, error) {
 	return "new-session-id", nil
 }
 func (c *stubController) SwitchProject(_ context.Context, dir string) (string, error) {
+	c.switchArg = dir
 	if c.switchErr != nil {
 		return "", c.switchErr
 	}
-	c.switchedTo = "/home/user/" + dir
+	// A registry hit passes an absolute path through unchanged; a bare name
+	// (no registry match) is joined under /home/user like resolveWorkdir.
+	if strings.HasPrefix(dir, "/") {
+		c.switchedTo = dir
+	} else {
+		c.switchedTo = "/home/user/" + dir
+	}
 	return c.switchedTo, nil
 }
 func (c *stubController) Info() (string, string) { return "/home/user/proj", "sess-1" }
@@ -87,7 +96,7 @@ func (o *captureOrigin) AskChoices(context.Context, []claude.Question) ([]claude
 func TestRouterControlCommands(t *testing.T) {
 	sender := &stubSender{}
 	ctl := &stubController{}
-	r := NewRouter(sender, ctl, nil, discardLogger(), 0)
+	r := NewRouter(sender, ctl, nil, nil, discardLogger(), 0)
 	ctx := context.Background()
 
 	t.Run("/new restarts the session and does not reach Claude", func(t *testing.T) {
@@ -120,6 +129,40 @@ func TestRouterControlCommands(t *testing.T) {
 		r.handle(ctx, Inbound{Text: "/effort high", Origin: o})
 		if len(sender.prompts) != 1 {
 			t.Fatalf("expected the prompt to reach Claude, got %v", sender.prompts)
+		}
+	})
+}
+
+func TestRouterProjectWildcard(t *testing.T) {
+	reg := NewProjectRegistry(t.TempDir() + "/projects.tsv")
+	if err := reg.Record("/home/user/claudecgwd"); err != nil {
+		t.Fatal(err)
+	}
+	ctl := &stubController{}
+	r := NewRouter(&stubSender{}, ctl, reg, nil, discardLogger(), 0)
+	ctx := context.Background()
+
+	t.Run("bare name resolves via registry to the tracked path", func(t *testing.T) {
+		o := &captureOrigin{}
+		r.handle(ctx, Inbound{Text: "/project claude", Origin: o})
+		if ctl.switchArg != "/home/user/claudecgwd" {
+			t.Fatalf("SwitchProject got %q, want the resolved path", ctl.switchArg)
+		}
+	})
+
+	t.Run("explicit path is passed through literally", func(t *testing.T) {
+		o := &captureOrigin{}
+		r.handle(ctx, Inbound{Text: "/project ~/other/repo", Origin: o})
+		if ctl.switchArg != "~/other/repo" {
+			t.Fatalf("path arg should pass through literally, got %q", ctl.switchArg)
+		}
+	})
+
+	t.Run("/projects lists tracked dirs", func(t *testing.T) {
+		o := &captureOrigin{}
+		r.handle(ctx, Inbound{Text: "/projects", Origin: o})
+		if len(o.replies) != 1 || !strings.Contains(o.replies[0], "/home/user/claudecgwd") {
+			t.Fatalf("expected the tracked dir in the listing, got %v", o.replies)
 		}
 	})
 }
