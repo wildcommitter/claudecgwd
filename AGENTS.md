@@ -81,10 +81,16 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
 - **Voice/audio** is transcribed locally (faster-whisper venv via
   `scripts/transcribe.py`) and fed in as the prompt text.
 - **Spoken replies (TTS)** via local piper (`scripts/tts`, `tts.go`): the
-  origin's `Reply` speaks when `VoicePolicy.ShouldSpeak` says so (default
-  `auto` = mirror a voice note; `/voice on|off|auto` toggles at runtime),
-  falling back to text for long replies / code / on any synth-or-send error.
-  Telegram uses `SendVoice`; WhatsApp uploads an `AudioMessage` (PTT).
+  origin's `Reply` speaks when `VoiceOut.CanSpeak()` and `VoicePolicy.ShouldSpeak`
+  agree (default `auto` = mirror a voice note; `/voice on|off|auto` toggles at
+  runtime), falling back to text for long replies / code / on any synth-or-send
+  error. Telegram uses `SendVoice`; WhatsApp uploads an `AudioMessage` (PTT).
+- **Audio language** (`language.go`, `/speech <language|country>`): a shared
+  `LanguagePolicy` drives both engines — a whisper code hint for transcription
+  (multilingual model, "" = auto-detect) and a piper voice for synthesis.
+  `scripts/tts` downloads the voice on demand; STT-only languages (no piper
+  voice, e.g. ja/ko) transcribe but fall back to text for replies. The
+  country→voice table is curated in `language.go`.
 - **RAG search** over attachments + conversation transcripts uses local
   embeddings (fastembed/ONNX, `scripts/rag`; SQLite index at
   `~/.local/share/assistant/rag/index.db`). `/search <query>` returns raw ranked

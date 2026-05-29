@@ -45,6 +45,14 @@ stt:
   # Empty = <workdir>/scripts/transcribe
   command: ""
 
+speech:
+  # Default audio language for transcription (incoming) + spoken replies
+  # (outgoing). "auto" = auto-detect speech, English voice. Or a language/
+  # country name or code, e.g. "spanish", "mexico", "de". Whisper is
+  # multilingual (one model); piper voices download on demand per language.
+  # Runtime-toggleable from chat with /speech.
+  language: auto
+
 tts:
   # Spoken (voice-note) replies via local piper. Set up once with
   # scripts/setup-tts.sh.

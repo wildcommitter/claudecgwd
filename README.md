@@ -35,6 +35,9 @@ the TUI parse is only a fallback.
 - **Voice notes, both ways** — incoming notes are transcribed locally
   (faster-whisper); replies can be spoken back as a voice note (piper TTS),
   mirroring the modality you used.
+- **Multilingual audio** — `/speech <language|country>` sets the audio
+  language for both engines. Whisper is multilingual out of the box; piper
+  voices (≈25 languages) download on demand the first time you switch.
 - **Image understanding** — a sent photo becomes a vision turn (Claude opens it
   with its Read tool), not just a saved file.
 - **File handling** — any sent file is saved to an inbox and catalogued.
@@ -54,6 +57,7 @@ the TUI parse is only a fallback.
 | `/projects` | List tracked project directories |
 | `/search <query>` | Semantic search over attachments + past conversations |
 | `/voice <on\|off\|auto>` | Spoken replies: always / never / mirror voice notes |
+| `/speech <language\|country>` | Set the audio language (transcription + voice); voices download on demand |
 | `/status` | Show the current project and session |
 | `/help` | List these commands |
 
