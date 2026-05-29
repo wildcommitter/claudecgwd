@@ -48,6 +48,9 @@ the TUI parse is only a fallback.
 - **Reminders** — "remind me at 6pm to…" fires a proactive ping when it's due.
 - **Semantic search (RAG)** — local embeddings over your attachments + past
   conversations; ask to recall something, or use `/search`.
+- **Persistent memory** — tell it durable facts ("remember I prefer metric")
+  and they're injected into every future session; managed with `/memory` and
+  `/forget`.
 - **Proactive notifications** — background jobs can push to every surface.
 - **Resilient** — outbound sends retry with backoff and the bridges reconnect
   on a network drop instead of taking the process down.
@@ -62,6 +65,8 @@ the TUI parse is only a fallback.
 | `/search <query>` | Semantic search over attachments + past conversations |
 | `/voice <on\|off\|auto>` | Spoken replies: always / never / mirror voice notes |
 | `/speech <language\|country>` | Set the audio language (transcription + voice); voices download on demand |
+| `/memory` | List the durable facts I remember about you |
+| `/forget <text\|all>` | Drop remembered facts matching text (or everything) |
 | `/status` | Show the current project and session |
 | `/health` | Uptime + a snapshot of the bridge's state |
 | `/help` | List these commands |

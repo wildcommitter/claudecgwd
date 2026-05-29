@@ -78,6 +78,12 @@ routines:
   # manage with scripts/routine. Empty = ~/.local/share/assistant/routines.jsonl
   store_path: ""
 
+memory:
+  # Durable facts about you, injected into the first prompt of each session
+  # (managed via scripts/remember and the /memory + /forget commands).
+  # Empty = ~/.local/share/assistant/memory.md
+  store_path: ""
+
 router:
   inbound_buffer: 32
   ready_idle_ms: 150

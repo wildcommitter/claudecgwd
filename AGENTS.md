@@ -38,7 +38,7 @@ internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
                 projects.go, files.go, stt.go, types.go (Origin/Bridge/Inbound)
 internal/config config.go (single Config struct, yaml)
 scripts/        install.sh, watch-ci.sh, notify.sh, send-file, remind, routine,
-                transcribe.py, rag / setup-rag.sh, tts / setup-tts.sh
+                remember, transcribe.py, rag / setup-rag.sh, tts / setup-tts.sh
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
 .claude/skills/ project skills (received-files, project-tracker, rag-search,
@@ -96,6 +96,12 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   `Auto-detect` entry, `AutoVoice()`), the spoken voice follows the *reply's*
   detected language (`detectVoiceLanguage` via whatlanggo) — so a Spanish answer
   is spoken by a Spanish voice; a pinned `/speech <lang>` forces one instead.
+- **Persistent memory** (`memory.go`, `scripts/remember`, the `memory` skill):
+  durable user facts in a markdown store, prepended to the first prompt of each
+  session via `Router.withMemory` (keyed off `SessionController.Generation()` so
+  it injects once per session, surviving `/new`, `/project`, restarts). Managed
+  with `/memory` (list) and `/forget <text|all>`. Distinct from RAG: this is
+  curated "what you know about the user," not transcript search.
 - **RAG search** over attachments + conversation transcripts uses local
   embeddings (fastembed/ONNX, `scripts/rag`; SQLite index at
   `~/.local/share/assistant/rag/index.db`). `/search <query>` returns raw ranked
