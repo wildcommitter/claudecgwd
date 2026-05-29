@@ -58,6 +58,15 @@ type ChoiceAsker func(ctx context.Context, qs []Question) ([]Answer, error)
 // askName is the Claude Code tool whose select menu we drive.
 const askName = "AskUserQuestion"
 
+// Menu-drive timing. Vars (not consts) so tests can shrink them; production
+// keeps the TUI-friendly delays that let its input handler register each key.
+var (
+	keyDelay       = 45 * time.Millisecond  // between individual keystrokes
+	navStepDelay   = 55 * time.Millisecond  // after a nav step, before re-reading the screen
+	questionSettle = 300 * time.Millisecond // after submitting one question, before the next
+	freeTextSettle = 150 * time.Millisecond // after opening the free-text entry, before typing
+)
+
 // Keystrokes understood by the Claude Code select menu.
 const (
 	keyUp    = "\x1b[A"
@@ -239,7 +248,7 @@ func (d *Driver) applyAnswers(qs []Question, answers []Answer) error {
 		if err := d.answerOne(q, ans); err != nil {
 			return err
 		}
-		time.Sleep(300 * time.Millisecond) // let the TUI advance to the next question
+		time.Sleep(questionSettle) // let the TUI advance to the next question
 	}
 	return nil
 }
@@ -312,7 +321,7 @@ func (d *Driver) answerFreeText(q Question, text string) error {
 	if err := d.sendKeys(keys...); err != nil {
 		return err
 	}
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(freeTextSettle)
 	return d.sendKeys(text, keyEnter)
 }
 
@@ -339,7 +348,7 @@ func (d *Driver) driveByScreen(q Question, ans Answer) bool {
 			if err := d.sendKeys(keySpace); err != nil {
 				return false
 			}
-			time.Sleep(55 * time.Millisecond)
+			time.Sleep(navStepDelay)
 		}
 		return d.sendKeys(keyEnter) == nil
 	}
@@ -370,7 +379,7 @@ func (d *Driver) navigateTo(labels []string, target int) bool {
 		if err := d.sendKeys(key); err != nil {
 			return false
 		}
-		time.Sleep(55 * time.Millisecond)
+		time.Sleep(navStepDelay)
 	}
 	final := d.currentMenuIndex(labels)
 	if final != target {
@@ -491,7 +500,7 @@ func (d *Driver) sendKeys(seqs ...string) error {
 		if _, err := io.WriteString(d.ptyFile, s); err != nil {
 			return fmt.Errorf("send key: %w", err)
 		}
-		time.Sleep(45 * time.Millisecond)
+		time.Sleep(keyDelay)
 	}
 	return nil
 }
