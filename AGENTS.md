@@ -135,7 +135,15 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   run under `superviseBridge` in `cmd/assistant`: a `Run()` that returns on a
   network error is restarted with backoff instead of cancelling the whole
   process. Inbound is already covered upstream — the Telegram poller retries
-  `getUpdates` internally and whatsmeow auto-reconnects.
+  `getUpdates` internally and whatsmeow auto-reconnects. Proactive pushes
+  (`Notifier.deliver` in `notify.go`) get an extra, longer retry on top: a
+  notification/file has no inbound turn to ride on, so a push that fails while a
+  surface is still reconnecting right after a restart (Telegram "bot not ready",
+  whatsmeow "websocket not connected" — the old `getUpdates` long-poll can
+  linger ~50s and 409 the new one) is retried with backoff up to
+  `notifyDeliverWindow`, each surface in its own goroutine so a slow/down one
+  can't block the others. Outbound file sends also verify Telegram's returned
+  message so a silent no-op surfaces as an error instead of a phantom "sent".
 - **Reminders:** when the user asks to be reminded of something later, run
   `scripts/remind <when> <message>` (`<when>` is anything `date -d` parses,
   e.g. `"18:00"`, `"tomorrow 9am"`, `"+25 minutes"`). The scheduler

@@ -11,6 +11,18 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+)
+
+// Proactive deliveries have no inbound turn to ride on, so — unlike a reply —
+// the notifier keeps retrying a failed push to ride out the surface-reconnect
+// window right after a restart, when a send briefly hits "bot not ready" or
+// "websocket not connected" (Telegram's old getUpdates long-poll can linger
+// ~50s, 409-ing the new one until it expires). Vars, not consts, so tests can
+// shrink them.
+var (
+	notifyDeliverWindow  = 2 * time.Minute
+	notifyDeliverBackoff = 3 * time.Second
 )
 
 // Pusher delivers a proactive (unsolicited) text message to one chat surface.
@@ -91,21 +103,48 @@ func (n *Notifier) Run(ctx context.Context) error {
 				continue
 			}
 			n.log.Info("broadcasting media", "file", d.File, "surfaces", len(n.media))
-			for _, m := range n.media {
-				if err := m(ctx, d.File, d.Caption); err != nil {
-					n.log.Warn("media push failed", "err", err)
-				}
+			for i, m := range n.media {
+				m, to := m, fmt.Sprintf("media#%d", i)
+				go n.deliver(ctx, to, func(c context.Context) error { return m(c, d.File, d.Caption) })
 			}
 			continue
 		}
 		n.log.Info("broadcasting notification", "len", len(text))
-		for _, p := range n.pushers {
-			if err := p(ctx, text); err != nil {
-				n.log.Warn("notify push failed", "err", err)
-			}
+		for i, p := range n.pushers {
+			p, to := p, fmt.Sprintf("text#%d", i)
+			go n.deliver(ctx, to, func(c context.Context) error { return p(c, text) })
 		}
 	}
 	return nil
+}
+
+// deliver pushes one proactive message to one surface, retrying with backoff
+// until it succeeds, the parent ctx is cancelled, or notifyDeliverWindow
+// elapses. Each surface runs in its own goroutine so a slow or down one can't
+// block the others or hold up the FIFO reader. Best-effort and at-least-once:
+// like withRetry, a retry could rarely duplicate, an accepted trade for not
+// dropping an unprompted message during the post-restart reconnect window.
+func (n *Notifier) deliver(ctx context.Context, to string, push func(context.Context) error) {
+	deadline := time.Now().Add(notifyDeliverWindow)
+	for attempt := 1; ; attempt++ {
+		err := push(ctx)
+		if err == nil {
+			if attempt > 1 {
+				n.log.Info("notify delivery recovered", "to", to, "attempt", attempt)
+			}
+			return
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			n.log.Warn("notify delivery gave up", "to", to, "attempts", attempt, "err", err)
+			return
+		}
+		n.log.Warn("notify push failed; retrying", "to", to, "attempt", attempt, "err", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(notifyDeliverBackoff):
+		}
+	}
 }
 
 // mediaDirective is the JSON a scripts/send-file line decodes to.
