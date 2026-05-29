@@ -317,8 +317,8 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 		if i == 0 && o.replyToID != 0 {
 			params.ReplyParameters = &models.ReplyParameters{MessageID: o.replyToID}
 		}
-		err := withRetry(ctx, o.bridge.log, "telegram reply", func() error {
-			_, e := o.bridge.bot.SendMessage(ctx, params)
+		err := withRetry(ctx, o.bridge.log, "telegram reply", func(actx context.Context) error {
+			_, e := o.bridge.bot.SendMessage(actx, params)
 			return e
 		})
 		if err != nil {
@@ -345,8 +345,8 @@ func (t *Telegram) SendTextToOwner(ctx context.Context, text string) error {
 		return fmt.Errorf("no allowed telegram users")
 	}
 	for _, chunk := range chunkText(text, tgMaxChars) {
-		err := withRetry(ctx, t.log, "telegram notify", func() error {
-			_, e := t.bot.SendMessage(ctx, &bot.SendMessageParams{
+		err := withRetry(ctx, t.log, "telegram notify", func(actx context.Context) error {
+			_, e := t.bot.SendMessage(actx, &bot.SendMessageParams{
 				ChatID: t.cfg.AllowedUserIDs[0],
 				Text:   chunk,
 			})
@@ -375,8 +375,8 @@ func (t *Telegram) SendQRToOwner(ctx context.Context, png []byte, caption string
 	if len(t.cfg.AllowedUserIDs) == 0 {
 		return fmt.Errorf("no allowed telegram users to send QR to")
 	}
-	return withRetry(ctx, t.log, "telegram qr", func() error {
-		_, e := t.bot.SendDocument(ctx, &bot.SendDocumentParams{
+	return withRetry(ctx, t.log, "telegram qr", func(actx context.Context) error {
+		_, e := t.bot.SendDocument(actx, &bot.SendDocumentParams{
 			ChatID:   t.cfg.AllowedUserIDs[0],
 			Document: &models.InputFileUpload{Filename: "whatsapp-qr.png", Data: bytes.NewReader(png)},
 			Caption:  caption,

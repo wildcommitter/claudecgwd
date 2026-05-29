@@ -242,9 +242,9 @@ func (w *WhatsApp) PushToOwner(ctx context.Context, text string) error {
 	to := w.client.Store.ID.ToNonAD()
 	for _, chunk := range chunkText(text, 4000) {
 		var resp whatsmeow.SendResponse
-		err := withRetry(ctx, w.log, "whatsapp notify", func() error {
+		err := withRetry(ctx, w.log, "whatsapp notify", func(actx context.Context) error {
 			var e error
-			resp, e = w.client.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(chunk)})
+			resp, e = w.client.SendMessage(actx, to, &waE2E.Message{Conversation: proto.String(chunk)})
 			return e
 		})
 		if err != nil {
@@ -475,9 +475,9 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 	chunks := chunkText(text, 4000)
 	for i, chunk := range chunks {
 		var resp whatsmeow.SendResponse
-		err := withRetry(ctx, o.bridge.log, "whatsapp send", func() error {
+		err := withRetry(ctx, o.bridge.log, "whatsapp send", func(actx context.Context) error {
 			var e error
-			resp, e = o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
+			resp, e = o.bridge.client.SendMessage(actx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
 			return e
 		})
 		if err != nil {
