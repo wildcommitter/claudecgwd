@@ -38,6 +38,11 @@ Volume=%h/.claude:/home/user/.claude:rw
 Volume=%h/.claude.json:/home/user/.claude.json:rw
 Volume=%h/.config/assistant:/home/user/.config/assistant:ro
 Volume=%h/claudecgwd:/home/user/claudecgwd:rw
+# Persistent runtime state (inbox, RAG index, WhatsApp pairing, reminders,
+# routines, on-demand voices). A NAMED volume so it auto-populates from the
+# image's baked venvs/models; a bind mount would shadow them. Recreate it
+# (`podman volume rm assistant-state`) after an image rebuild to refresh those.
+Volume=assistant-state:/home/user/.local/share/assistant
 
 # Hardening.
 NoNewPrivileges=true

@@ -54,6 +54,13 @@ services:
       # The project the assistant operates in (its workdir). This is the only
       # host code the sandbox can touch.
       - ${HOME}/claudecgwd:/home/user/claudecgwd
+      # Persistent runtime state: inbox, RAG index, WhatsApp pairing, reminders,
+      # routines, project registry, on-demand voices. A NAMED volume (not a bind
+      # mount) so it is auto-populated from the image's baked venvs/models on
+      # first run — a bind mount would shadow those and break STT/RAG/TTS.
+      # NOTE: after rebuilding the image with updated venvs/models, recreate this
+      # volume (`docker volume rm claudecgwd_assistant-state`) to pick them up.
+      - assistant-state:/home/user/.local/share/assistant
 
     # Sandbox hardening: no privilege escalation, drop all Linux capabilities
     # (plain process exec for the Bash tool needs none). Relax only if a tool
@@ -66,3 +73,9 @@ services:
     # Writable scratch space without making the rest of the FS writable.
     tmpfs:
       - /tmp
+
+volumes:
+  # Named volume for the assistant's runtime state. Auto-initialized from the
+  # image (so the baked STT/RAG/TTS venvs + default voice land here) and then
+  # persisted across container recreation.
+  assistant-state:

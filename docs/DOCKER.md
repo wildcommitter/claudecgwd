@@ -41,9 +41,23 @@ Only these are mounted (everything else of the host is invisible):
 | `~/.claude.json`              | `/home/user/.claude.json`        | rw   | user/auth state |
 | `~/.config/assistant`         | `/home/user/.config/assistant`   | ro   | `config.yaml` + `secrets.env` |
 | `~/claudecgwd`                | `/home/user/claudecgwd`          | rw   | the project workdir (the only host code the agent can touch) |
+| `assistant-state` (named vol) | `/home/user/.local/share/assistant` | rw | persistent runtime state (see below) |
 
 To let the assistant work on more projects, add more `volumes:` entries in
 `docker-compose.yml`. That is the knob that trades sandbox tightness for reach.
+
+### Persistent state
+
+Runtime state — the inbox, RAG index, WhatsApp pairing (`whatsapp.db`),
+reminders, routines, the project registry, and on-demand TTS voices — lives
+under `/home/user/.local/share/assistant`. It's a **named volume**, not a bind
+mount, on purpose: the image bakes the STT/RAG/TTS venvs and the default voice
+into that same directory, and a named volume is auto-populated from the image on
+first run, whereas a bind mount of an empty host dir would shadow (hide) them and
+break voice/search. The trade-off: after rebuilding the image with updated
+venvs/models, recreate the volume to pick them up —
+`docker volume rm claudecgwd_assistant-state` (or `podman volume rm
+assistant-state` for the Quadlet unit).
 
 Hardening: `no-new-privileges`, `cap_drop: ALL`, and a `tmpfs` `/tmp`.
 
