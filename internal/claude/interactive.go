@@ -251,17 +251,50 @@ func (d *Driver) applyAnswers(qs []Question, answers []Answer) error {
 // the menu can't be read (an unexpected render), it falls back to the original
 // open-loop keystroke sequence so behaviour is never worse than before.
 func (d *Driver) answerOne(q Question, ans Answer) error {
+	// Capture the live menu render and what we read from it — this drive is
+	// otherwise silent, which made selection failures undiagnosable.
+	d.logMenuRender(q, ans)
 	// Free-text "Other" has no on-screen label to match against, so drive blind
 	// to the trailing entry, then type the answer.
 	if len(ans.Indices) == 0 && ans.FreeText != "" {
 		return d.answerFreeText(q, ans.FreeText)
 	}
 	if d.driveByScreen(q, ans) {
+		d.log.Info("menu: selection driven by on-screen confirmation", "header", q.Header)
 		return nil
 	}
 	d.log.Warn("menu: could not confirm the selection on screen; using blind keystrokes",
 		"header", q.Header, "multiselect", q.MultiSelect)
 	return d.sendKeys(selectionKeys(ans, len(q.Options), q.MultiSelect)...)
+}
+
+// logMenuRender dumps the menu-relevant screen state so a failed drive can be
+// diagnosed from the journal without a live terminal: the rows the cursor
+// marker is on, the index we resolve from them, and (when nothing matches) the
+// raw non-empty rows so the actual TUI render is visible.
+func (d *Driver) logMenuRender(q Question, ans Answer) {
+	labels := optionLabels(q)
+	d.term.Lock()
+	cols, rows := d.term.Size()
+	var marked, screen []string
+	for y := 0; y < rows; y++ {
+		row := readRow(d.term, y, cols)
+		if row == "" {
+			continue
+		}
+		if len(screen) < 18 {
+			screen = append(screen, row)
+		}
+		if opt, ok := strippedMenuRow(row); ok {
+			marked = append(marked, opt)
+		}
+	}
+	d.term.Unlock()
+	d.log.Info("menu render",
+		"header", q.Header, "multiselect", q.MultiSelect,
+		"labels", labels, "want", ans.Indices,
+		"marked_rows", marked, "resolved_index", d.currentMenuIndex(labels),
+		"screen", screen)
 }
 
 // answerFreeText drives the cursor past the listed options onto the trailing
@@ -339,7 +372,11 @@ func (d *Driver) navigateTo(labels []string, target int) bool {
 		}
 		time.Sleep(55 * time.Millisecond)
 	}
-	return d.currentMenuIndex(labels) == target
+	final := d.currentMenuIndex(labels)
+	if final != target {
+		d.log.Warn("menu: navigation did not converge", "target", target, "final", final, "max_steps", maxSteps)
+	}
+	return final == target
 }
 
 // nextNavKey returns the key to step the cursor from cur toward target, or
