@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+# Manage proactive routines — scheduled prompts the bridge runs headless and
+# pushes to chat. The assistant calls this when the user asks for a recurring
+# task ("every morning summarize X", "remind me hourly to stretch").
+#
+#   routine add "<spec>" "<prompt...>"   # spec: "daily HH:MM" | "hourly" | "every <dur>"
+#   routine list
+#   routine remove <id>
+#
+# Store: $CLAUDECGWD_ROUTINES or ~/.local/share/assistant/routines.jsonl
+
+set -euo pipefail
+store="${CLAUDECGWD_ROUTINES:-$HOME/.local/share/assistant/routines.jsonl}"
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  add)
+    spec="${1:?usage: routine add \"<spec>\" \"<prompt>\"}"; shift || true
+    prompt="$*"
+    [[ -n "$prompt" ]] || { echo "prompt required" >&2; exit 2; }
+    mkdir -p "$(dirname "$store")"
+    python3 - "$store" "$spec" "$prompt" <<'PY'
+import json, sys, time, random
+store, spec, prompt = sys.argv[1], sys.argv[2], sys.argv[3]
+rid = "r%d%04d" % (int(time.time()), random.randint(0, 9999))
+with open(store, "a") as f:
+    f.write(json.dumps({"id": rid, "spec": spec, "prompt": prompt}) + "\n")
+print(f"added routine {rid}: [{spec}] {prompt}")
+PY
+    ;;
+  list)
+    [[ -f "$store" ]] || { echo "(no routines)"; exit 0; }
+    python3 - "$store" <<'PY'
+import json, sys
+for line in open(sys.argv[1]):
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        r = json.loads(line)
+    except Exception:
+        continue
+    print(f"{r['id']}  [{r['spec']}]  {r['prompt']}")
+PY
+    ;;
+  remove|rm)
+    id="${1:?usage: routine remove <id>}"
+    [[ -f "$store" ]] || exit 0
+    python3 - "$store" "$id" <<'PY'
+import json, sys
+store, rid = sys.argv[1], sys.argv[2]
+keep = []
+for line in open(store):
+    s = line.strip()
+    if not s:
+        continue
+    try:
+        r = json.loads(s)
+    except Exception:
+        continue
+    if r.get("id") != rid:
+        keep.append(s)
+open(store, "w").write("\n".join(keep) + ("\n" if keep else ""))
+print("removed", rid)
+PY
+    ;;
+  *)
+    echo 'usage: routine {add "<spec>" "<prompt>" | list | remove <id>}' >&2
+    echo 'spec: "daily HH:MM" | "hourly" | "every <dur>" (e.g. every 6h, every 30m)' >&2
+    ;;
+esac

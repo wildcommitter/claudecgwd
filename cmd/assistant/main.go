@@ -156,6 +156,16 @@ func run(configPath string, logger *slog.Logger) error {
 			defer wg.Done()
 			_ = scheduler.Run(ctx)
 		}()
+
+		// Proactive routines: scheduled prompts run headless (claude -p, a
+		// separate session) and pushed to every surface. Created via
+		// scripts/routine.
+		routines := bridge.NewRoutines(cfg.Routines.StorePath, cfg.Claude.Binary, cfg.Claude.Workdir, logger.With("component", "routines"), pushers...)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = routines.Run(ctx)
+		}()
 	}
 
 	wg.Add(1)

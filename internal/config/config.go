@@ -17,8 +17,16 @@ type Config struct {
 	STT       STTConfig       `yaml:"stt"`
 	TTS       TTSConfig       `yaml:"tts"`
 	Reminders RemindersConfig `yaml:"reminders"`
+	Routines  RoutinesConfig  `yaml:"routines"`
 	RAG       RAGConfig       `yaml:"rag"`
 	Router    RouterConfig    `yaml:"router"`
+}
+
+type RoutinesConfig struct {
+	// StorePath is the JSONL store of scheduled routines (managed by
+	// scripts/routine). Empty = ~/.local/share/assistant/routines.jsonl. The
+	// scheduler runs whenever at least one push surface is configured.
+	StorePath string `yaml:"store_path"`
 }
 
 type SpeechConfig struct {

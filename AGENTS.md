@@ -37,8 +37,8 @@ internal/claude driver.go (PTY + vt10x), transcript.go (read replies from
 internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
                 projects.go, files.go, stt.go, types.go (Origin/Bridge/Inbound)
 internal/config config.go (single Config struct, yaml)
-scripts/        install.sh, watch-ci.sh, notify.sh, remind, transcribe.py,
-                rag / rag.py / setup-rag.sh (RAG), tts / setup-tts.sh (TTS)
+scripts/        install.sh, watch-ci.sh, notify.sh, remind, routine,
+                transcribe.py, rag / setup-rag.sh, tts / setup-tts.sh
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
 .claude/skills/ project skills (received-files, project-tracker, rag-search)
@@ -116,6 +116,13 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   e.g. `"18:00"`, `"tomorrow 9am"`, `"+25 minutes"`). The scheduler
   (`scheduler.go`) polls the store and pushes the reminder through the same
   surfaces when it's due. One-shot; the store is append-only TSV.
+- **Proactive routines:** when the user asks for a *recurring* task ("every
+  morning summarize X", "hourly, check CI"), run `scripts/routine add
+  "<spec>" "<prompt>"` (spec: `daily HH:MM`, `hourly`, or `every <dur>`).
+  `routines.go` fires each due routine by running the prompt headless
+  (`claude -p`, a separate session — it does NOT touch the live conversation)
+  and pushing the result to every surface. `scripts/routine list|remove`
+  manage them. Reminders push a fixed message; routines run a fresh task.
 
 ## Conventions
 
