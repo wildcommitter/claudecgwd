@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,6 +405,46 @@ func (t *Telegram) SendTextToOwner(ctx context.Context, text string) error {
 		}
 	}
 	return nil
+}
+
+// SendFileToOwner delivers a file to the first allowed user — as a previewable
+// photo for images, otherwise as a document. Serves as a MediaPusher so the
+// assistant can push generated files (charts, docs, screenshots) out via
+// scripts/send-file. Waits briefly for startup.
+func (t *Telegram) SendFileToOwner(ctx context.Context, path, caption string) error {
+	select {
+	case <-t.ready:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(30 * time.Second):
+		return fmt.Errorf("telegram bot not ready")
+	}
+	if len(t.cfg.AllowedUserIDs) == 0 {
+		return fmt.Errorf("no allowed telegram users")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+	chatID := t.cfg.AllowedUserIDs[0]
+	name := filepath.Base(path)
+	return withRetry(ctx, t.log, "telegram file", func(actx context.Context) error {
+		var e error
+		if isImageFile(path) {
+			_, e = t.bot.SendPhoto(actx, &bot.SendPhotoParams{
+				ChatID:  chatID,
+				Photo:   &models.InputFileUpload{Filename: name, Data: bytes.NewReader(data)},
+				Caption: caption,
+			})
+		} else {
+			_, e = t.bot.SendDocument(actx, &bot.SendDocumentParams{
+				ChatID:   chatID,
+				Document: &models.InputFileUpload{Filename: name, Data: bytes.NewReader(data)},
+				Caption:  caption,
+			})
+		}
+		return e
+	})
 }
 
 // SendQRToOwner sends a QR image (e.g. a WhatsApp pairing code) to the first

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -12,22 +13,36 @@ import (
 	"syscall"
 )
 
-// Pusher delivers a proactive (unsolicited) message to one chat surface.
+// Pusher delivers a proactive (unsolicited) text message to one chat surface.
 type Pusher func(ctx context.Context, text string) error
+
+// MediaPusher proactively delivers a file (image or document) to one chat
+// surface, with an optional caption.
+type MediaPusher func(ctx context.Context, path, caption string) error
 
 // Notifier watches a FIFO for notification lines and broadcasts each to every
 // configured surface. This is the proactive-push path: replies are tied to an
 // inbound turn, but a watcher finishing later has no turn to ride on, so the
 // assistant writes to the FIFO (via scripts/notify.sh) and the bridge fans it
-// out. Lines are base64-encoded so multi-line notifications survive.
+// out. Lines are base64-encoded so multi-line notifications survive. A line that
+// decodes to a {"file":...} JSON directive (from scripts/send-file) is delivered
+// as media instead of text.
 type Notifier struct {
 	path    string
 	log     *slog.Logger
 	pushers []Pusher
+	media   []MediaPusher
 }
 
 func NewNotifier(path string, log *slog.Logger, pushers ...Pusher) *Notifier {
 	return &Notifier{path: NotifyPath(path), log: log, pushers: pushers}
+}
+
+// WithMedia registers the per-surface file senders used for {"file":...}
+// directives. Returns the notifier for chaining.
+func (n *Notifier) WithMedia(media ...MediaPusher) *Notifier {
+	n.media = media
+	return n
 }
 
 // NotifyPath resolves the FIFO path: the explicit arg, else
@@ -70,6 +85,15 @@ func (n *Notifier) Run(ctx context.Context) error {
 			continue
 		}
 		text := decodeNotif(line)
+		if d, ok := parseMediaDirective(text); ok {
+			n.log.Info("broadcasting media", "file", d.File)
+			for _, m := range n.media {
+				if err := m(ctx, d.File, d.Caption); err != nil {
+					n.log.Warn("media push failed", "err", err)
+				}
+			}
+			continue
+		}
 		n.log.Info("broadcasting notification", "len", len(text))
 		for _, p := range n.pushers {
 			if err := p(ctx, text); err != nil {
@@ -78,6 +102,26 @@ func (n *Notifier) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// mediaDirective is the JSON a scripts/send-file line decodes to.
+type mediaDirective struct {
+	File    string `json:"file"`
+	Caption string `json:"caption"`
+}
+
+// parseMediaDirective recognizes a {"file":...} send-file directive. Plain text
+// notifications aren't JSON objects, so they pass through untouched.
+func parseMediaDirective(s string) (mediaDirective, bool) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "{") {
+		return mediaDirective{}, false
+	}
+	var d mediaDirective
+	if err := json.Unmarshal([]byte(s), &d); err != nil || d.File == "" {
+		return mediaDirective{}, false
+	}
+	return d, true
 }
 
 // decodeNotif base64-decodes a line, falling back to the raw text (so a manual

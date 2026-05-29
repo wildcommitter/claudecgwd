@@ -134,14 +134,17 @@ func run(configPath string, logger *slog.Logger) error {
 	// to every configured surface (so a watcher finishing can ping the user
 	// even with no inbound turn to reply to).
 	var pushers []bridge.Pusher
+	var mediaPushers []bridge.MediaPusher
 	if tg != nil {
 		pushers = append(pushers, tg.SendTextToOwner)
+		mediaPushers = append(mediaPushers, tg.SendFileToOwner)
 	}
 	if wa != nil {
 		pushers = append(pushers, wa.PushToOwner)
+		mediaPushers = append(mediaPushers, wa.SendFileToOwner)
 	}
 	if len(pushers) > 0 {
-		notifier := bridge.NewNotifier("", logger.With("component", "notify"), pushers...)
+		notifier := bridge.NewNotifier("", logger.With("component", "notify"), pushers...).WithMedia(mediaPushers...)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

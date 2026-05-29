@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Send a file (image or document) to the operator's chat(s) via the bridge.
+# Images are delivered as a previewable photo, everything else as a document.
+# This is the outbound-media counterpart of scripts/notify.sh: the assistant
+# calls it to push a file it created (a chart, a generated doc, a screenshot).
+#
+#   send-file <path> [caption...]
+#
+# Emits a {"file","caption"} directive (base64) on the notify FIFO; the running
+# bridge decodes it and fans it out to every surface.
+
+set -euo pipefail
+
+fifo="${CLAUDECGWD_NOTIFY_FIFO:-$HOME/.local/share/assistant/notify.fifo}"
+
+path="${1:-}"
+if [[ -z "$path" ]]; then
+  echo "usage: send-file <path> [caption]" >&2
+  exit 2
+fi
+shift
+caption="$*"
+
+if [[ ! -f "$path" ]]; then
+  echo "no such file: $path" >&2
+  exit 1
+fi
+abs="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+if [[ ! -p "$fifo" ]]; then
+  echo "notify FIFO not present (is the bridge running?): $fifo" >&2
+  exit 1
+fi
+
+json="$(python3 -c 'import json,sys; print(json.dumps({"file": sys.argv[1], "caption": sys.argv[2]}))' "$abs" "$caption")"
+printf '%s\n' "$(printf '%s' "$json" | base64 | tr -d '\n')" >> "$fifo"
+echo "sent: $abs"

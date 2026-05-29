@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -263,6 +264,62 @@ func (w *WhatsApp) PushToOwner(ctx context.Context, text string) error {
 		}
 		w.markSent(string(resp.ID))
 	}
+	return nil
+}
+
+// SendFileToOwner uploads and delivers a file to the operator's self-chat — an
+// image message for images, otherwise a document. Serves as a MediaPusher for
+// the assistant's scripts/send-file path.
+func (w *WhatsApp) SendFileToOwner(ctx context.Context, path, caption string) error {
+	if w.client == nil || w.client.Store.ID == nil {
+		return fmt.Errorf("whatsapp not connected")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read file: %w", err)
+	}
+	mimeType := mime.TypeByExtension(filepath.Ext(path))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+	to := w.client.Store.ID.ToNonAD()
+	fileLen := uint64(len(data))
+
+	var msg *waE2E.Message
+	if isImageFile(path) {
+		up, err := w.client.Upload(ctx, data, whatsmeow.MediaImage)
+		if err != nil {
+			return fmt.Errorf("whatsapp image upload: %w", err)
+		}
+		msg = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{
+			URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath),
+			MediaKey: up.MediaKey, FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
+			FileLength: &fileLen, Mimetype: proto.String(mimeType), Caption: proto.String(caption),
+		}}
+	} else {
+		up, err := w.client.Upload(ctx, data, whatsmeow.MediaDocument)
+		if err != nil {
+			return fmt.Errorf("whatsapp document upload: %w", err)
+		}
+		name := filepath.Base(path)
+		msg = &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{
+			URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath),
+			MediaKey: up.MediaKey, FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256,
+			FileLength: &fileLen, Mimetype: proto.String(mimeType), Caption: proto.String(caption),
+			FileName: proto.String(name), Title: proto.String(name),
+		}}
+	}
+
+	var resp whatsmeow.SendResponse
+	err = withRetry(ctx, w.log, "whatsapp file", func(actx context.Context) error {
+		var e error
+		resp, e = w.client.SendMessage(actx, to, msg)
+		return e
+	})
+	if err != nil {
+		return fmt.Errorf("whatsapp file: %w", err)
+	}
+	w.markSent(string(resp.ID))
 	return nil
 }
 

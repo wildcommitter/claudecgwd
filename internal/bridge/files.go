@@ -60,6 +60,16 @@ func receivedNotice(source, path, caption string, isImage bool) string {
 	return b.String()
 }
 
+// isImageFile reports whether a path looks like a still image by extension, so
+// outbound files can be sent as a previewable photo rather than a document.
+func isImageFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		return true
+	}
+	return false
+}
+
 // sanitizeName makes an arbitrary filename safe for the inbox directory.
 func sanitizeName(s string) string {
 	s = strings.TrimSpace(s)
