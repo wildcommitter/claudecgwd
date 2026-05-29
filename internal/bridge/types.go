@@ -2,9 +2,21 @@ package bridge
 
 import (
 	"context"
+	"time"
 
 	"github.com/wildcommitter/claudecgwd/internal/claude"
 )
+
+// heartbeatDelay is how long a turn must run before NotifyPending posts a
+// textual "working…" nudge on top of the platform typing indicator. Quick
+// turns finish well under this and stay silent; the typing dots are enough for
+// them and a posted-then-deleted line would only flicker. Once a turn outlasts
+// this, the nudge reassures the user that Claude isn't stuck, and it is removed
+// when the reply lands.
+const heartbeatDelay = 20 * time.Second
+
+// heartbeatText is the one-line nudge posted on long turns.
+const heartbeatText = "⏳ working on it…"
 
 // Origin knows how to deliver a reply back to whoever sent an Inbound message.
 // Each bridge defines its own concrete Origin implementation.

@@ -253,20 +253,50 @@ func (o *tgOrigin) Describe() string {
 	return fmt.Sprintf("telegram(id=%d)", o.userID)
 }
 
-// NotifyPending pings the "typing" chat action every 4s until ctx is
-// cancelled. Telegram fades the indicator after ~5s, so the loop re-arms it.
+// NotifyPending keeps the "typing" chat action alive (Telegram fades it after
+// ~5s, so the 4s ticker re-arms it) and, if the turn outlasts heartbeatDelay,
+// posts a one-line textual nudge so the user knows Claude isn't stuck on a long
+// turn. That nudge is deleted once ctx is cancelled (reply ready / turn over),
+// so quick turns stay clean and long ones leave nothing behind.
 func (o *tgOrigin) NotifyPending(ctx context.Context) {
-	t := time.NewTicker(4 * time.Second)
-	defer t.Stop()
-	for {
+	typing := time.NewTicker(4 * time.Second)
+	defer typing.Stop()
+	heartbeat := time.NewTimer(heartbeatDelay)
+	defer heartbeat.Stop()
+
+	arm := func() {
 		_, _ = o.bridge.bot.SendChatAction(ctx, &bot.SendChatActionParams{
 			ChatID: o.chatID,
 			Action: models.ChatActionTyping,
 		})
+	}
+
+	var heartbeatID int
+	arm() // first typing ping immediately
+	for {
 		select {
 		case <-ctx.Done():
+			if heartbeatID != 0 {
+				// ctx is already cancelled, so clean up on a fresh,
+				// short-lived context of our own.
+				delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_, _ = o.bridge.bot.DeleteMessage(delCtx, &bot.DeleteMessageParams{
+					ChatID:    o.chatID,
+					MessageID: heartbeatID,
+				})
+				cancel()
+			}
 			return
-		case <-t.C:
+		case <-typing.C:
+			arm()
+		case <-heartbeat.C:
+			m, err := o.bridge.bot.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: o.chatID,
+				Text:   heartbeatText,
+			})
+			if err == nil && m != nil {
+				heartbeatID = m.ID
+			}
 		}
 	}
 }
