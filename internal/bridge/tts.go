@@ -30,10 +30,17 @@ func NewSynthesizer(cfg config.TTSConfig, lang *LanguagePolicy) *Synthesizer {
 
 func (s *Synthesizer) Enabled() bool { return s != nil && s.command != "" }
 
-// voiceFor returns the piper voice to use right now: the current language's
-// voice if a policy is wired, else the configured fallback.
-func (s *Synthesizer) voiceFor() string {
+// voiceFor returns the piper voice to use for this reply. In auto mode the
+// voice follows the reply's detected language (so a Spanish answer is spoken by
+// a Spanish voice); with a language pinned via /speech it's that fixed voice.
+// Falls back to the policy/default voice when detection is unconfident.
+func (s *Synthesizer) voiceFor(text string) string {
 	if s.lang != nil {
+		if s.lang.AutoVoice() {
+			if l := detectVoiceLanguage(text); l != nil && l.Piper != "" {
+				return l.Piper
+			}
+		}
 		if v := s.lang.PiperVoice(); v != "" {
 			return v
 		}
@@ -53,7 +60,7 @@ func (s *Synthesizer) Synthesize(ctx context.Context, text string) (string, erro
 
 	cmd := exec.CommandContext(ctx, s.command, path)
 	cmd.Stdin = strings.NewReader(text)
-	if v := s.voiceFor(); v != "" {
+	if v := s.voiceFor(text); v != "" {
 		cmd.Env = append(os.Environ(), "TTS_VOICE="+v)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+
+	"github.com/abadojack/whatlanggo"
 )
 
 // Language maps a human name / country / code to the two audio engines:
@@ -53,6 +55,30 @@ var languages = []Language{
 	{"Korean", "ko", "", []string{"korean", "ko", "korea"}},
 }
 
+// detectVoiceLanguage guesses the language of reply text and returns the
+// matching table entry (or nil if detection is unconfident or unsupported).
+// Used in auto mode so the spoken voice follows the language Claude replied in.
+// Detection needs a little prose to be reliable, so very short / low-confidence
+// results are rejected (caller falls back to the default voice).
+func detectVoiceLanguage(text string) *Language {
+	if len([]rune(strings.TrimSpace(text))) < 12 {
+		return nil // too short to detect reliably
+	}
+	info := whatlanggo.Detect(text)
+	if info.Confidence < 0.6 {
+		return nil
+	}
+	code := info.Lang.Iso6391()
+	if code == "" {
+		return nil
+	}
+	l, ok := lookupLanguage(code)
+	if !ok {
+		return nil
+	}
+	return l
+}
+
 // lookupLanguage resolves a free-form query (country, language name, or code) to
 // a Language. Matching is case-insensitive against the aliases.
 func lookupLanguage(q string) (*Language, bool) {
@@ -97,6 +123,14 @@ func NewLanguagePolicy(def string) *LanguagePolicy {
 func (p *LanguagePolicy) Current() *Language { return p.cur.Load() }
 func (p *LanguagePolicy) Set(l *Language)    { p.cur.Store(l) }
 
+// AutoVoice reports whether the outgoing voice should follow each reply's
+// detected language rather than a fixed one. True only in the auto-detect entry
+// (the one with no forced whisper code).
+func (p *LanguagePolicy) AutoVoice() bool {
+	l := p.cur.Load()
+	return l != nil && l.Whisper == ""
+}
+
 // WhisperCode is the transcription language hint ("" = auto-detect).
 func (p *LanguagePolicy) WhisperCode() string {
 	if l := p.cur.Load(); l != nil {
@@ -119,6 +153,9 @@ func (p *LanguagePolicy) Describe() string {
 	l := p.cur.Load()
 	if l == nil {
 		return "auto-detect"
+	}
+	if l.Whisper == "" { // auto entry
+		return l.Name + " — transcribe: auto-detect, speak: matches the reply language"
 	}
 	voice := l.Piper
 	if voice == "" {

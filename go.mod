@@ -3,6 +3,7 @@ module github.com/wildcommitter/claudecgwd
 go 1.26.3
 
 require (
+	github.com/abadojack/whatlanggo v1.0.1
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/creack/pty v1.1.24
 	github.com/go-telegram/bot v1.21.0

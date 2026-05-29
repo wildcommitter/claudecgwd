@@ -37,6 +37,47 @@ func TestLookupLanguage(t *testing.T) {
 	}
 }
 
+func TestDetectVoiceLanguage(t *testing.T) {
+	cases := []struct {
+		text       string
+		wantWhisper string // "" means: expect no confident detection
+	}{
+		{"Hola Guillermo, ¿cómo estás? Hoy el cielo está despejado y soleado.", "es"},
+		{"Bonjour, je m'appelle Claude et je peux t'aider avec plaisir aujourd'hui.", "fr"},
+		{"The capital of France is Paris, a lovely city on the river Seine.", "en"},
+		{"Guten Tag, ich helfe dir gerne bei deinen Aufgaben und Fragen.", "de"},
+		{"ok", ""}, // too short → no detection
+	}
+	for _, c := range cases {
+		l := detectVoiceLanguage(c.text)
+		if c.wantWhisper == "" {
+			if l != nil {
+				t.Errorf("detect(%q) = %v, want no detection", c.text, l.Name)
+			}
+			continue
+		}
+		if l == nil || l.Whisper != c.wantWhisper {
+			got := "nil"
+			if l != nil {
+				got = l.Whisper
+			}
+			t.Errorf("detect(%q) whisper=%s, want %s", c.text, got, c.wantWhisper)
+		}
+	}
+}
+
+func TestAutoVoiceMode(t *testing.T) {
+	p := NewLanguagePolicy("auto")
+	if !p.AutoVoice() {
+		t.Fatal("auto entry should report AutoVoice() true")
+	}
+	es, _ := lookupLanguage("spanish")
+	p.Set(es)
+	if p.AutoVoice() {
+		t.Fatal("a pinned language must not be AutoVoice()")
+	}
+}
+
 func TestLanguagePolicy(t *testing.T) {
 	p := NewLanguagePolicy("auto")
 	if p.WhisperCode() != "" || p.PiperVoice() == "" {
