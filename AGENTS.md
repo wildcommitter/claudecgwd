@@ -34,10 +34,10 @@ cmd/ptydump     PTY/TUI debugging helper
 internal/claude driver.go (PTY + vt10x), transcript.go (read replies from
                 ~/.claude/projects/<slug>/<session>.jsonl), interactive.go
                 (AskUserQuestion handling)
-internal/bridge router.go, telegram.go, whatsapp.go, notify.go, files.go,
-                stt.go, types.go (Origin/Bridge/Inbound interfaces)
+internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
+                files.go, stt.go, types.go (Origin/Bridge/Inbound interfaces)
 internal/config config.go (single Config struct, yaml)
-scripts/        install.sh, watch-ci.sh, notify.sh, transcribe.py
+scripts/        install.sh, watch-ci.sh, notify.sh, remind, transcribe.py
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
 .claude/skills/ project skills (e.g. received-files)
@@ -62,13 +62,20 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   CGO-free SQLite (`modernc.org/sqlite`) is aliased to the `sqlite3` dialect.
 - **Files** sent over chat are downloaded to `files.inbox_dir`
   (`~/.local/share/assistant/inbox`); the session gets a `[file received ...]`
-  notice and the `received-files` skill catalogs them.
+  notice and the `received-files` skill catalogs them. **Images** get an
+  `[image received ...]` notice telling you to open the saved file with the
+  Read tool — so a sent photo is a vision turn, not just a catalog entry.
 - **Voice/audio** is transcribed locally (faster-whisper venv via
   `scripts/transcribe.py`) and fed in as the prompt text.
 - **Proactive notifications:** a reply only reaches the user on an inbound
   turn. To push unprompted (e.g. a finished background job), write to the
   notify FIFO via `scripts/notify.sh "msg"` — the Notifier fans it out to all
   surfaces.
+- **Reminders:** when the user asks to be reminded of something later, run
+  `scripts/remind <when> <message>` (`<when>` is anything `date -d` parses,
+  e.g. `"18:00"`, `"tomorrow 9am"`, `"+25 minutes"`). The scheduler
+  (`scheduler.go`) polls the store and pushes the reminder through the same
+  surfaces when it's due. One-shot; the store is append-only TSV.
 
 ## Conventions
 

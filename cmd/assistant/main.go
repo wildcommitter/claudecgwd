@@ -106,6 +106,15 @@ func run(configPath string, logger *slog.Logger) error {
 			defer wg.Done()
 			_ = notifier.Run(ctx)
 		}()
+
+		// Scheduled reminders ride the same push surfaces: scripts/remind
+		// appends to the store and the scheduler fires each one when it's due.
+		scheduler := bridge.NewScheduler(cfg.Reminders.StorePath, logger.With("component", "scheduler"), pushers...)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = scheduler.Run(ctx)
+		}()
 	}
 
 	wg.Add(1)

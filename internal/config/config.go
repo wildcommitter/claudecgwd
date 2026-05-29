@@ -12,9 +12,17 @@ type Config struct {
 	Claude   ClaudeConfig   `yaml:"claude"`
 	Telegram TelegramConfig `yaml:"telegram"`
 	WhatsApp WhatsAppConfig `yaml:"whatsapp"`
-	Files    FilesConfig    `yaml:"files"`
-	STT      STTConfig      `yaml:"stt"`
-	Router   RouterConfig   `yaml:"router"`
+	Files     FilesConfig     `yaml:"files"`
+	STT       STTConfig       `yaml:"stt"`
+	Reminders RemindersConfig `yaml:"reminders"`
+	Router    RouterConfig    `yaml:"router"`
+}
+
+type RemindersConfig struct {
+	// StorePath is the append-only reminder store the scheduler polls and that
+	// scripts/remind appends to. Empty = ~/.local/share/assistant/reminders.jsonl.
+	// The scheduler runs whenever at least one push surface is configured.
+	StorePath string `yaml:"store_path"`
 }
 
 type FilesConfig struct {

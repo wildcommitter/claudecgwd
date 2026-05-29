@@ -45,6 +45,12 @@ stt:
   # Empty = <workdir>/scripts/transcribe
   command: ""
 
+reminders:
+  # Scheduled proactive pings. The scheduler runs automatically whenever a
+  # push surface (Telegram/WhatsApp) is configured; create reminders with
+  # scripts/remind. Empty = ~/.local/share/assistant/reminders.jsonl
+  store_path: ""
+
 router:
   inbound_buffer: 32
   ready_idle_ms: 150

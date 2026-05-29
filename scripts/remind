@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Schedule a one-shot reminder. The running bridge's scheduler polls the store
+# and pushes the message to every chat surface (Telegram + WhatsApp) when it
+# comes due — the same proactive path scripts/notify.sh uses.
+#
+#   scripts/remind <when> <message...>
+#
+# <when> is anything `date -d` understands, resolved against the local clock:
+#   scripts/remind "18:00"                 "call the dentist"
+#   scripts/remind "2026-05-30 09:00"      "stand-up"
+#   scripts/remind "tomorrow 8am"          "ship the release"
+#   scripts/remind "+25 minutes"           "take the bread out"
+#
+# Stored as one TSV line "<RFC3339-UTC>\t<id>\t<message>" (append-only), so no
+# JSON escaping is needed. Tabs/newlines in the message are flattened to spaces.
+
+set -euo pipefail
+
+store="${CLAUDECGWD_REMINDERS:-$HOME/.local/share/assistant/reminders.jsonl}"
+
+if [[ $# -lt 2 ]]; then
+  echo "usage: remind <when> <message...>" >&2
+  exit 2
+fi
+
+when="$1"
+shift
+msg="$*"
+
+# Normalize the time to RFC3339 UTC (the format the scheduler parses).
+if ! fire_at="$(date -u -d "$when" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"; then
+  echo "could not parse time: $when" >&2
+  exit 2
+fi
+
+# Flatten tabs/newlines so the TSV record stays on one line with three fields.
+msg="$(printf '%s' "$msg" | tr '\t\n' '  ')"
+
+# A sortable, collision-resistant id (uuidgen if available, else time+pid).
+if command -v uuidgen >/dev/null 2>&1; then
+  id="$(uuidgen)"
+else
+  id="$(date +%s%N)-$$"
+fi
+
+mkdir -p "$(dirname "$store")"
+printf '%s\t%s\t%s\n' "$fire_at" "$id" "$msg" >> "$store"
+echo "reminder set for $fire_at (UTC): $msg"
