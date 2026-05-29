@@ -47,10 +47,10 @@ stt:
 
 speech:
   # Default audio language for transcription (incoming) + spoken replies
-  # (outgoing). "auto" = auto-detect speech, English voice. Or a language/
-  # country name or code, e.g. "spanish", "mexico", "de". Whisper is
-  # multilingual (one model); piper voices download on demand per language.
-  # Runtime-toggleable from chat with /speech.
+  # (outgoing). "auto" = auto-detect incoming speech, and the spoken reply
+  # follows the language Claude answers in. Or pin a language/country name or
+  # code, e.g. "spanish", "mexico", "de". Whisper is multilingual (one model);
+  # piper voices download on demand per language. Toggle from chat with /speech.
   language: auto
 
 tts:

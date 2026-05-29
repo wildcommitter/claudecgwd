@@ -37,7 +37,9 @@ the TUI parse is only a fallback.
   mirroring the modality you used.
 - **Multilingual audio** — `/speech <language|country>` sets the audio
   language for both engines. Whisper is multilingual out of the box; piper
-  voices (≈25 languages) download on demand the first time you switch.
+  voices (≈25 languages) download on demand the first time you switch. In the
+  default **auto** mode the spoken voice follows the language Claude *replies*
+  in — answer in Spanish, hear a Spanish voice — no switching needed.
 - **Image understanding** — a sent photo becomes a vision turn (Claude opens it
   with its Read tool), not just a saved file.
 - **File handling** — any sent file is saved to an inbox and catalogued.

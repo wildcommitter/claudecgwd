@@ -91,7 +91,10 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   (multilingual model, "" = auto-detect) and a piper voice for synthesis.
   `scripts/tts` downloads the voice on demand; STT-only languages (no piper
   voice, e.g. ja/ko) transcribe but fall back to text for replies. The
-  country→voice table is curated in `language.go`.
+  country→voice table is curated in `language.go`. In **auto mode** (the default
+  `Auto-detect` entry, `AutoVoice()`), the spoken voice follows the *reply's*
+  detected language (`detectVoiceLanguage` via whatlanggo) — so a Spanish answer
+  is spoken by a Spanish voice; a pinned `/speech <lang>` forces one instead.
 - **RAG search** over attachments + conversation transcripts uses local
   embeddings (fastembed/ONNX, `scripts/rag`; SQLite index at
   `~/.local/share/assistant/rag/index.db`). `/search <query>` returns raw ranked
