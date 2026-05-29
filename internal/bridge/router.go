@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -33,16 +34,17 @@ type Router struct {
 	driver     Sender
 	ctl        SessionController
 	projects   *ProjectRegistry
+	ragCmd     string // path to scripts/rag for the /search command ("" disables it)
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
 }
 
-func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
+func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, ctl: ctl, projects: projects, inbound: inbound, log: log, turnBudget: turnBudget}
+	return &Router{driver: driver, ctl: ctl, projects: projects, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget}
 }
 
 func (r *Router) Run(ctx context.Context) error {
@@ -146,6 +148,7 @@ const controlHelp = "Session commands:\n" +
 	"/new — start a fresh conversation (clears context)\n" +
 	"/project <name|dir> — switch project (name is wildcard-matched against tracked projects)\n" +
 	"/projects — list tracked project directories\n" +
+	"/search <query> — semantic search over attachments + past conversations\n" +
 	"/status — show the current project and session\n" +
 	"/help — this message"
 
@@ -164,7 +167,7 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "projects", "status", "help":
+	case "new", "project", "projects", "search", "status", "help":
 		return name, arg, true
 	}
 	return "", "", false
@@ -174,6 +177,30 @@ func parseControl(text string) (name, arg string, ok bool) {
 // path rather than a project-name pattern to wildcard-match.
 func looksLikePath(arg string) bool {
 	return strings.ContainsAny(arg, "/~") || arg == "." || arg == ".."
+}
+
+// handleSearch runs a semantic search via the rag script and replies with the
+// ranked snippets. It's a raw retrieval view — distinct from auto-retrieval,
+// where the assistant queries the index itself mid-turn and synthesizes.
+func (r *Router) handleSearch(ctx context.Context, reply func(string), query string) {
+	cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, r.ragCmd, "query", query, "-k", "5").CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		r.log.Warn("search failed", "err", err)
+		msg := "⚠️  search failed: " + err.Error()
+		if text != "" {
+			msg += "\n" + text
+		}
+		reply(msg)
+		return
+	}
+	if text == "" {
+		reply("No matches.")
+		return
+	}
+	reply("🔎 Results for \"" + query + "\":\n\n" + text)
 }
 
 // handleControl executes a control command and replies on the origin.
@@ -198,6 +225,16 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 		}
 		r.log.Info("started new session", "session", sid)
 		reply("🆕 Fresh conversation started — the previous context is cleared.")
+	case "search":
+		if r.ragCmd == "" {
+			reply("Search isn't configured.")
+			return
+		}
+		if arg == "" {
+			reply("Usage: /search <query>")
+			return
+		}
+		r.handleSearch(ctx, reply, arg)
 	case "projects":
 		if r.projects == nil {
 			reply("Project tracking isn't enabled.")

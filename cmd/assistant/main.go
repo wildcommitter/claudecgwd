@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -52,10 +53,15 @@ func run(configPath string, logger *slog.Logger) error {
 	// default store path (~/.local/share/assistant/projects.tsv).
 	projects := bridge.NewProjectRegistry("")
 
+	// /search shells out to scripts/rag. Resolve it from the configured (stable)
+	// workdir so it keeps working after a /project switch moves the session.
+	ragCmd := filepath.Join(cfg.Claude.Workdir, "scripts", "rag")
+
 	router := bridge.NewRouter(
 		driver,
 		driver, // also the SessionController for /new, /project, /status
 		projects,
+		ragCmd,
 		inbound,
 		logger.With("component", "router"),
 		time.Duration(cfg.Router.WatchdogTimeoutS)*time.Second,
