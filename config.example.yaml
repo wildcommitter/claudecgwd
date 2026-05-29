@@ -45,6 +45,19 @@ stt:
   # Empty = <workdir>/scripts/transcribe
   command: ""
 
+tts:
+  # Spoken (voice-note) replies via local piper. Set up once with
+  # scripts/setup-tts.sh.
+  enabled: false
+  # When to speak: auto (only when you sent a voice note), always, or off.
+  # Runtime-toggleable from chat with /voice.
+  mode: auto
+  # piper voice model (must match the one baked by setup-tts.sh / the image).
+  voice: en_US-amy-medium
+  # Synthesis command, called as `<command> <out.ogg>` with text on stdin.
+  # Empty = <workdir>/scripts/tts
+  command: ""
+
 reminders:
   # Scheduled proactive pings. The scheduler runs automatically whenever a
   # push surface (Telegram/WhatsApp) is configured; create reminders with

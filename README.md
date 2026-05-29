@@ -32,7 +32,9 @@ the TUI parse is only a fallback.
 
 - **Two chat surfaces** — Telegram and WhatsApp (linked device; the pairing QR
   is delivered through Telegram). All surfaces share the one Claude session.
-- **Voice notes** — transcribed locally (faster-whisper) and fed in as the prompt.
+- **Voice notes, both ways** — incoming notes are transcribed locally
+  (faster-whisper); replies can be spoken back as a voice note (piper TTS),
+  mirroring the modality you used.
 - **Image understanding** — a sent photo becomes a vision turn (Claude opens it
   with its Read tool), not just a saved file.
 - **File handling** — any sent file is saved to an inbox and catalogued.
@@ -51,6 +53,7 @@ the TUI parse is only a fallback.
 | `/project <name\|dir>` | Switch project; a bare name is wildcard-matched against tracked projects |
 | `/projects` | List tracked project directories |
 | `/search <query>` | Semantic search over attachments + past conversations |
+| `/voice <on\|off\|auto>` | Spoken replies: always / never / mirror voice notes |
 | `/status` | Show the current project and session |
 | `/help` | List these commands |
 
@@ -96,10 +99,12 @@ their own Python venvs; set them up once (the Docker image bakes them in):
 ```sh
 scripts/setup-stt.sh    # faster-whisper for voice-note transcription
 scripts/setup-rag.sh    # fastembed embeddings for /search + recall
+scripts/setup-tts.sh    # piper for spoken (voice-note) replies
 ```
 
-Then set `stt.enabled: true` in config. Build/refresh the search index with
-`scripts/rag index` (incremental); query with `scripts/rag query "<text>"`.
+Then set `stt.enabled: true` / `tts.enabled: true` in config. Build/refresh the
+search index with `scripts/rag index` (incremental); query with
+`scripts/rag query "<text>"`.
 
 ### systemd
 

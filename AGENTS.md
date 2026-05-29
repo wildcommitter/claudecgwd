@@ -38,7 +38,7 @@ internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
                 projects.go, files.go, stt.go, types.go (Origin/Bridge/Inbound)
 internal/config config.go (single Config struct, yaml)
 scripts/        install.sh, watch-ci.sh, notify.sh, remind, transcribe.py,
-                rag / rag.py / setup-rag.sh (local RAG search)
+                rag / rag.py / setup-rag.sh (RAG), tts / setup-tts.sh (TTS)
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
 .claude/skills/ project skills (received-files, project-tracker, rag-search)
@@ -80,6 +80,11 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   Read tool — so a sent photo is a vision turn, not just a catalog entry.
 - **Voice/audio** is transcribed locally (faster-whisper venv via
   `scripts/transcribe.py`) and fed in as the prompt text.
+- **Spoken replies (TTS)** via local piper (`scripts/tts`, `tts.go`): the
+  origin's `Reply` speaks when `VoicePolicy.ShouldSpeak` says so (default
+  `auto` = mirror a voice note; `/voice on|off|auto` toggles at runtime),
+  falling back to text for long replies / code / on any synth-or-send error.
+  Telegram uses `SendVoice`; WhatsApp uploads an `AudioMessage` (PTT).
 - **RAG search** over attachments + conversation transcripts uses local
   embeddings (fastembed/ONNX, `scripts/rag`; SQLite index at
   `~/.local/share/assistant/rag/index.db`). `/search <query>` returns raw ranked
