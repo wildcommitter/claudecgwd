@@ -485,7 +485,7 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 		text = "(empty response)"
 	}
 	// Spoken reply when the policy says so; fall back to text on any failure.
-	if o.bridge.voice.Enabled() && o.bridge.voice.Policy.ShouldSpeak(o.voiceIn, text) {
+	if o.bridge.voice.CanSpeak() && o.bridge.voice.Policy.ShouldSpeak(o.voiceIn, text) {
 		if err := o.replyVoice(ctx, text); err == nil {
 			return nil
 		} else {
