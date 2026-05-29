@@ -151,6 +151,7 @@ const controlHelp = "Session commands:\n" +
 	"/projects — list tracked project directories\n" +
 	"/search <query> — semantic search over attachments + past conversations\n" +
 	"/voice <on|off|auto> — spoken replies: always / never / mirror voice notes\n" +
+	"/speech <language|country> — set the audio language (transcription + voice)\n" +
 	"/status — show the current project and session\n" +
 	"/help — this message"
 
@@ -169,7 +170,7 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "projects", "search", "voice", "status", "help":
+	case "new", "project", "projects", "search", "voice", "speech", "status", "help":
 		return name, arg, true
 	}
 	return "", "", false
@@ -254,6 +255,29 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 		}
 		r.voice.Policy.Set(m)
 		reply("🔊 Voice replies set to " + m.String() + ".")
+	case "speech":
+		if r.voice == nil || r.voice.Lang == nil {
+			reply("Language switching isn't available.")
+			return
+		}
+		if arg == "" {
+			reply("🗣️ Audio language: " + r.voice.Lang.Describe() +
+				"\n\nSet it with /speech <language or country>, e.g. /speech spanish, /speech mexico, /speech de.\n\nSupported: " + languageList())
+			return
+		}
+		l, ok := lookupLanguage(arg)
+		if !ok {
+			reply("Unknown language \"" + arg + "\". Try a language or country name/code (e.g. spanish, fr, mexico). Supported: " + languageList())
+			return
+		}
+		r.voice.Lang.Set(l)
+		msg := "🗣️ Audio language set to " + l.Name + " (transcribe: " + whisperLabel(l.Whisper) + ")."
+		if l.Piper == "" {
+			msg += " No voice for this language — spoken replies will fall back to text."
+		} else {
+			msg += " The voice model downloads on first use."
+		}
+		reply(msg)
 	case "projects":
 		if r.projects == nil {
 			reply("Project tracking isn't enabled.")

@@ -15,20 +15,26 @@ import (
 type Transcriber struct {
 	command string
 	model   string
+	lang    *LanguagePolicy // optional: forces the transcription language ("" = auto-detect)
 }
 
-func NewTranscriber(cfg config.STTConfig) *Transcriber {
+func NewTranscriber(cfg config.STTConfig, lang *LanguagePolicy) *Transcriber {
 	if !cfg.Enabled {
 		return nil
 	}
-	return &Transcriber{command: cfg.Command, model: cfg.Model}
+	return &Transcriber{command: cfg.Command, model: cfg.Model, lang: lang}
 }
 
 func (t *Transcriber) Enabled() bool { return t != nil && t.command != "" }
 
-// Transcribe returns the transcript of the audio file at path.
+// Transcribe returns the transcript of the audio file at path, hinting the
+// configured language (empty = the engine auto-detects).
 func (t *Transcriber) Transcribe(ctx context.Context, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, t.command, path, t.model)
+	lang := ""
+	if t.lang != nil {
+		lang = t.lang.WhisperCode()
+	}
+	cmd := exec.CommandContext(ctx, t.command, path, t.model, lang)
 	out, err := cmd.Output()
 	if err != nil {
 		if ee, ok := err.(*exec.ExitError); ok {

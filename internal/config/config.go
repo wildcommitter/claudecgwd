@@ -13,11 +13,19 @@ type Config struct {
 	Telegram TelegramConfig `yaml:"telegram"`
 	WhatsApp WhatsAppConfig `yaml:"whatsapp"`
 	Files     FilesConfig     `yaml:"files"`
+	Speech    SpeechConfig    `yaml:"speech"`
 	STT       STTConfig       `yaml:"stt"`
 	TTS       TTSConfig       `yaml:"tts"`
 	Reminders RemindersConfig `yaml:"reminders"`
 	RAG       RAGConfig       `yaml:"rag"`
 	Router    RouterConfig    `yaml:"router"`
+}
+
+type SpeechConfig struct {
+	// Language is the default audio language for transcription + spoken replies:
+	// "auto" (auto-detect incoming, English voice) or a language/country name or
+	// code (e.g. "spanish", "mexico", "de"). Runtime-toggleable with /speech.
+	Language string `yaml:"language"`
 }
 
 type TTSConfig struct {
@@ -151,6 +159,9 @@ func (c *Config) applyDefaults() {
 		if c.STT.Command == "" {
 			c.STT.Command = filepath.Join(c.Claude.Workdir, "scripts", "transcribe")
 		}
+	}
+	if c.Speech.Language == "" {
+		c.Speech.Language = "auto"
 	}
 	if c.TTS.Enabled {
 		if c.TTS.Mode == "" {

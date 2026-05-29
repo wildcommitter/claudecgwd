@@ -57,11 +57,17 @@ func run(configPath string, logger *slog.Logger) error {
 	// workdir so it keeps working after a /project switch moves the session.
 	ragCmd := filepath.Join(cfg.Claude.Workdir, "scripts", "rag")
 
+	// Shared audio-language policy (the /speech knob): drives both the incoming
+	// (whisper) and outgoing (piper voice) engines.
+	langPolicy := bridge.NewLanguagePolicy(cfg.Speech.Language)
+
 	// Spoken (voice-note) replies: nil-safe bundle of the synthesizer + the
-	// live policy that /voice toggles. Disabled cleanly when tts.enabled is off.
+	// live /voice policy + the shared language policy. Disabled cleanly when
+	// tts.enabled is off (Synth is nil, but Lang still drives /speech for STT).
 	voice := &bridge.VoiceOut{
-		Synth:  bridge.NewSynthesizer(cfg.TTS),
+		Synth:  bridge.NewSynthesizer(cfg.TTS, langPolicy),
 		Policy: bridge.NewVoicePolicy(cfg.TTS.Mode),
+		Lang:   langPolicy,
 	}
 
 	router := bridge.NewRouter(
@@ -77,7 +83,7 @@ func run(configPath string, logger *slog.Logger) error {
 
 	var wg sync.WaitGroup
 
-	stt := bridge.NewTranscriber(cfg.STT)
+	stt := bridge.NewTranscriber(cfg.STT, langPolicy)
 
 	// Auto-indexer: keeps the RAG index fresh (ticker for conversations, plus an
 	// immediate poke when a file arrives). Only runs if the embeddings venv is

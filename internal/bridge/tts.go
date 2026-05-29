@@ -17,17 +17,29 @@ import (
 // Enabled() is false, means replies are text-only.
 type Synthesizer struct {
 	command string
-	voice   string
+	voice   string          // fallback voice when no language policy is set
+	lang    *LanguagePolicy // optional: selects the voice for the current language
 }
 
-func NewSynthesizer(cfg config.TTSConfig) *Synthesizer {
+func NewSynthesizer(cfg config.TTSConfig, lang *LanguagePolicy) *Synthesizer {
 	if !cfg.Enabled {
 		return nil
 	}
-	return &Synthesizer{command: cfg.Command, voice: cfg.Voice}
+	return &Synthesizer{command: cfg.Command, voice: cfg.Voice, lang: lang}
 }
 
 func (s *Synthesizer) Enabled() bool { return s != nil && s.command != "" }
+
+// voiceFor returns the piper voice to use right now: the current language's
+// voice if a policy is wired, else the configured fallback.
+func (s *Synthesizer) voiceFor() string {
+	if s.lang != nil {
+		if v := s.lang.PiperVoice(); v != "" {
+			return v
+		}
+	}
+	return s.voice
+}
 
 // Synthesize writes text to a temporary OGG/Opus file and returns its path. The
 // caller is responsible for removing the file once sent.
@@ -41,8 +53,8 @@ func (s *Synthesizer) Synthesize(ctx context.Context, text string) (string, erro
 
 	cmd := exec.CommandContext(ctx, s.command, path)
 	cmd.Stdin = strings.NewReader(text)
-	if s.voice != "" {
-		cmd.Env = append(os.Environ(), "TTS_VOICE="+s.voice)
+	if v := s.voiceFor(); v != "" {
+		cmd.Env = append(os.Environ(), "TTS_VOICE="+v)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		os.Remove(path)
@@ -121,12 +133,23 @@ func speakable(text string) bool {
 	return utf8.RuneCountInString(t) <= 700
 }
 
-// VoiceOut bundles the synthesizer and policy so they can be wired through the
-// bridges and router as one optional dependency (nil = voice replies disabled).
+// VoiceOut bundles the synthesizer, on/off policy, and language policy so they
+// can be wired through the bridges and router as one optional dependency
+// (nil = voice replies disabled).
 type VoiceOut struct {
 	Synth  *Synthesizer
 	Policy *VoicePolicy
+	Lang   *LanguagePolicy
 }
 
-// Enabled reports whether voice replies can be produced at all.
+// Enabled reports whether the TTS engine is available at all.
 func (v *VoiceOut) Enabled() bool { return v != nil && v.Synth.Enabled() }
+
+// CanSpeak reports whether a spoken reply is currently possible — the engine is
+// enabled AND the active language has a voice (some languages are STT-only).
+func (v *VoiceOut) CanSpeak() bool {
+	if !v.Enabled() {
+		return false
+	}
+	return v.Lang == nil || v.Lang.PiperVoice() != ""
+}
