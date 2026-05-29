@@ -31,6 +31,7 @@ type fakeMenu struct {
 	selected     map[int]bool
 	submitted    bool
 	submittedSel []int
+	dropEnters   int // ignore this many Enter presses (simulate a submit not registering)
 	done         chan struct{}
 }
 
@@ -51,6 +52,13 @@ func newFakeMenu(labels []string, multi, wrap bool, start int) *fakeMenu {
 func (m *fakeMenu) renderLocked() {
 	var b strings.Builder
 	b.WriteString("\x1b[2J\x1b[H") // clear + home
+	if m.submitted {
+		// Menu closed: nothing for the driver's screen reader to match, so
+		// menuGone() resolves true (mirrors the TUI advancing past the menu).
+		b.WriteString("(submitted)\r\n")
+		_, _ = m.term.Write([]byte(b.String()))
+		return
+	}
 	b.WriteString("Pick something\r\n")
 	for i, l := range m.labels {
 		if i == m.cursor {
@@ -124,7 +132,9 @@ func (m *fakeMenu) feed(b []byte) []byte {
 			}
 			i++
 		case b[i] == '\r':
-			if !m.submitted {
+			if m.dropEnters > 0 {
+				m.dropEnters-- // simulate the submit not registering
+			} else if !m.submitted {
 				m.submitted = true
 				if m.multi {
 					m.submittedSel = sortedKeys(m.selected)
@@ -169,9 +179,12 @@ func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 // fastMenuTiming shrinks the keystroke delays so the simulation runs quickly.
 func fastMenuTiming(t *testing.T) {
 	t.Helper()
-	k, n, q, f := keyDelay, navStepDelay, questionSettle, freeTextSettle
+	k, n, q, f, w := keyDelay, navStepDelay, questionSettle, freeTextSettle, submitConfirmWindow
 	keyDelay, navStepDelay, questionSettle, freeTextSettle = time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond
-	t.Cleanup(func() { keyDelay, navStepDelay, questionSettle, freeTextSettle = k, n, q, f })
+	submitConfirmWindow = 20 * time.Millisecond
+	t.Cleanup(func() {
+		keyDelay, navStepDelay, questionSettle, freeTextSettle, submitConfirmWindow = k, n, q, f, w
+	})
 }
 
 // driveAnswer runs the real answerOne against a fake menu and waits for submit.
@@ -249,6 +262,21 @@ func TestBlindSelectMisfiresUnderWrap(t *testing.T) {
 	}
 	if got := m.result(); len(got) == 1 && got[0] == 0 {
 		t.Errorf("blind drive unexpectedly landed correctly under wrap (%v); the regression scenario no longer holds", got)
+	}
+}
+
+func TestDriveByScreen_RecoversWhenEnterDropped(t *testing.T) {
+	fastMenuTiming(t)
+	labels := []string{"Coffee", "Tea", "Mate", "Water"}
+	q := Question{Options: choicesFrom(labels)}
+	// The menu ignores the first Enter (the live "submit didn't register" mode).
+	// The submit-confirmation must notice the menu didn't close and re-send
+	// Enter, still landing on the chosen option rather than stalling.
+	m := newFakeMenu(labels, false, false, 0)
+	m.dropEnters = 1
+	driveAnswer(t, m, q, Answer{Indices: []int{2}})
+	if got := m.result(); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("landed on %v, want [2] after a dropped Enter", got)
 	}
 }
 

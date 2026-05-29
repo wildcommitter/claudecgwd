@@ -65,6 +65,12 @@ var (
 	navStepDelay   = 55 * time.Millisecond  // after a nav step, before re-reading the screen
 	questionSettle = 300 * time.Millisecond // after submitting one question, before the next
 	freeTextSettle = 150 * time.Millisecond // after opening the free-text entry, before typing
+
+	// After driving a selection, confirm the menu actually closed/advanced; if a
+	// submit (Enter) didn't register, re-send it up to submitConfirmRetries times
+	// rather than letting the parked turn stall for minutes.
+	submitConfirmWindow  = 600 * time.Millisecond
+	submitConfirmRetries = 3
 )
 
 // Keystrokes understood by the Claude Code select menu.
@@ -268,13 +274,53 @@ func (d *Driver) answerOne(q Question, ans Answer) error {
 	if len(ans.Indices) == 0 && ans.FreeText != "" {
 		return d.answerFreeText(q, ans.FreeText)
 	}
+	labels := optionLabels(q)
 	if d.driveByScreen(q, ans) {
 		d.log.Info("menu: selection driven by on-screen confirmation", "header", q.Header)
-		return nil
+	} else {
+		d.log.Warn("menu: could not confirm the selection on screen; using blind keystrokes",
+			"header", q.Header, "multiselect", q.MultiSelect)
+		if err := d.sendKeys(selectionKeys(ans, len(q.Options), q.MultiSelect)...); err != nil {
+			return err
+		}
 	}
-	d.log.Warn("menu: could not confirm the selection on screen; using blind keystrokes",
-		"header", q.Header, "multiselect", q.MultiSelect)
-	return d.sendKeys(selectionKeys(ans, len(q.Options), q.MultiSelect)...)
+	// Confirm the selection submitted — the menu should advance to the next
+	// question or close. A live failure mode is the Enter not registering, which
+	// otherwise leaves the turn to stall for minutes; re-send just Enter a few
+	// times. Re-sending Enter alone is safe: the navigation and any multi-select
+	// toggles already landed, so the chosen set is never disturbed.
+	for attempt := 1; ; attempt++ {
+		if d.menuGone(labels) {
+			if attempt > 1 {
+				d.log.Info("menu: submitted after re-sending Enter", "header", q.Header, "attempts", attempt)
+			}
+			return nil
+		}
+		if attempt > submitConfirmRetries {
+			d.log.Warn("menu: selection did not register after retries", "header", q.Header, "retries", submitConfirmRetries)
+			return nil
+		}
+		d.log.Warn("menu: selection not registered; re-sending Enter", "header", q.Header, "attempt", attempt)
+		if err := d.sendKeys(keyEnter); err != nil {
+			return err
+		}
+	}
+}
+
+// menuGone reports whether this question's select menu is no longer the active
+// highlighted menu — i.e. the selection submitted and the TUI advanced or
+// closed. Polls briefly so a slightly-late TUI repaint isn't read as failure.
+func (d *Driver) menuGone(labels []string) bool {
+	deadline := time.Now().Add(submitConfirmWindow)
+	for {
+		if d.currentMenuIndex(labels) < 0 {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(navStepDelay)
+	}
 }
 
 // logMenuRender dumps the menu-relevant screen state so a failed drive can be
