@@ -42,7 +42,9 @@ the TUI parse is only a fallback.
   in — answer in Spanish, hear a Spanish voice — no switching needed.
 - **Image understanding** — a sent photo becomes a vision turn (Claude opens it
   with its Read tool), not just a saved file.
-- **File handling** — any sent file is saved to an inbox and catalogued.
+- **File handling, both ways** — any sent file is saved to an inbox and
+  catalogued; the assistant can also **send files back** (charts, PDFs,
+  screenshots, exports) as photos or documents.
 - **Reminders** — "remind me at 6pm to…" fires a proactive ping when it's due.
 - **Semantic search (RAG)** — local embeddings over your attachments + past
   conversations; ask to recall something, or use `/search`.

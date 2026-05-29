@@ -37,11 +37,12 @@ internal/claude driver.go (PTY + vt10x), transcript.go (read replies from
 internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
                 projects.go, files.go, stt.go, types.go (Origin/Bridge/Inbound)
 internal/config config.go (single Config struct, yaml)
-scripts/        install.sh, watch-ci.sh, notify.sh, remind, routine,
+scripts/        install.sh, watch-ci.sh, notify.sh, send-file, remind, routine,
                 transcribe.py, rag / setup-rag.sh, tts / setup-tts.sh
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
-.claude/skills/ project skills (received-files, project-tracker, rag-search)
+.claude/skills/ project skills (received-files, project-tracker, rag-search,
+                send-media)
 ```
 
 ## Architecture & invariants
@@ -108,6 +109,12 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   turn. To push unprompted (e.g. a finished background job), write to the
   notify FIFO via `scripts/notify.sh "msg"` — the Notifier fans it out to all
   surfaces.
+- **Outbound media:** replies are text/voice only — to send a *file* (image,
+  chart, PDF, screenshot, export) use `scripts/send-file <path> [caption]`
+  (the `send-media` skill). It rides the notify FIFO as a `{"file":...}`
+  directive; the Notifier's `MediaPusher`s deliver it — images as a previewable
+  photo, else a document (Telegram `SendPhoto`/`SendDocument`; WhatsApp uploads
+  an `ImageMessage`/`DocumentMessage`).
 - **Network resilience:** outbound sends (replies, notifications, QR) go
   through `withRetry` (`retry.go`) — bounded exponential backoff so a brief blip
   doesn't drop a message (at-least-once; a retry can rarely duplicate). Bridges
