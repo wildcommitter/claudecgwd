@@ -75,6 +75,10 @@ type Driver struct {
 	doneOnce  sync.Once
 	stopping  atomic.Bool
 	childDone chan struct{} // closed when the current child's Wait() returns
+
+	// gen increments on every (re)start, so callers can tell when the session
+	// changed (e.g. to re-inject persistent memory after /new or /project).
+	gen atomic.Int64
 }
 
 // New constructs a Driver. Call Start to spawn the child.
@@ -93,6 +97,7 @@ func New(cfg config.ClaudeConfig, log *slog.Logger) *Driver {
 // Start spawns the claude binary under a PTY and waits for the first
 // ready-prompt before returning.
 func (d *Driver) Start(ctx context.Context) error {
+	d.gen.Add(1) // a new session generation (fresh start, /new, or /project)
 	args := d.buildArgs()
 	d.log.Info("spawning claude", "binary", d.cfg.Binary, "args", args, "workdir", d.cfg.Workdir)
 
@@ -205,6 +210,10 @@ func (d *Driver) SwitchProject(ctx context.Context, dir string) (string, error) 
 func (d *Driver) Info() (workdir, sessionID string) {
 	return d.cfg.Workdir, d.cfg.SessionID
 }
+
+// Generation returns a counter that increments on every session (re)start, so
+// the router can detect a new session and re-inject persistent memory.
+func (d *Driver) Generation() int { return int(d.gen.Load()) }
 
 // restart swaps the live session to a new workdir/session id by tearing the
 // current child down and spawning a fresh one. stopping is raised across the

@@ -18,8 +18,16 @@ type Config struct {
 	TTS       TTSConfig       `yaml:"tts"`
 	Reminders RemindersConfig `yaml:"reminders"`
 	Routines  RoutinesConfig  `yaml:"routines"`
+	Memory    MemoryConfig    `yaml:"memory"`
 	RAG       RAGConfig       `yaml:"rag"`
 	Router    RouterConfig    `yaml:"router"`
+}
+
+type MemoryConfig struct {
+	// StorePath is the markdown file of durable user facts injected into each
+	// session and managed via scripts/remember + /memory + /forget. Empty =
+	// ~/.local/share/assistant/memory.md.
+	StorePath string `yaml:"store_path"`
 }
 
 type RoutinesConfig struct {

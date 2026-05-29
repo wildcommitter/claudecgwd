@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Remember a durable fact about the user — persistent across sessions. The
+# assistant calls this when the user shares something worth keeping (a
+# preference, a name, a recurring detail). The fact is injected into the first
+# prompt of each new session so the assistant "knows the user."
+#
+#   remember <fact...>
+#   remember --list
+#
+# Store: $CLAUDECGWD_MEMORY or ~/.local/share/assistant/memory.md (markdown
+# bullets). Manage from chat with /memory and /forget.
+
+set -euo pipefail
+
+store="${CLAUDECGWD_MEMORY:-$HOME/.local/share/assistant/memory.md}"
+
+if [[ "${1:-}" == "--list" ]]; then
+  [[ -f "$store" ]] && cat "$store" || echo "(nothing remembered yet)"
+  exit 0
+fi
+if [[ $# -lt 1 ]]; then
+  echo "usage: remember <fact...>  |  remember --list" >&2
+  exit 2
+fi
+
+fact="$(printf '%s' "$*" | tr '\n' ' ')"
+mkdir -p "$(dirname "$store")"
+# Skip if an identical fact is already stored.
+if [[ -f "$store" ]] && grep -qxF -- "- $fact" "$store"; then
+  echo "already remembered: $fact"
+  exit 0
+fi
+printf -- '- %s\n' "$fact" >> "$store"
+echo "remembered: $fact"

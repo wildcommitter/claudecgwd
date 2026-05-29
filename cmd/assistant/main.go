@@ -70,11 +70,16 @@ func run(configPath string, logger *slog.Logger) error {
 		Lang:   langPolicy,
 	}
 
+	// Persistent user memory: durable facts injected into the first prompt of
+	// each session (managed via scripts/remember, /memory, /forget).
+	memory := bridge.NewMemoryStore(cfg.Memory.StorePath)
+
 	router := bridge.NewRouter(
 		driver,
 		driver, // also the SessionController for /new, /project, /status
 		projects,
 		voice,
+		memory,
 		ragCmd,
 		inbound,
 		logger.With("component", "router"),

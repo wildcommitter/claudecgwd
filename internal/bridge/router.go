@@ -28,25 +28,31 @@ type SessionController interface {
 	NewSession(ctx context.Context) (string, error)
 	SwitchProject(ctx context.Context, dir string) (string, error)
 	Info() (workdir, sessionID string)
+	// Generation increments on each session (re)start so the router can re-inject
+	// persistent memory into the first prompt of a new session.
+	Generation() int
 }
 
 type Router struct {
 	driver     Sender
 	ctl        SessionController
 	projects   *ProjectRegistry
-	voice      *VoiceOut // for the /voice command ("" disables it)
-	ragCmd     string    // path to scripts/rag for the /search command ("" disables it)
+	voice      *VoiceOut    // for the /voice command ("" disables it)
+	memory     *MemoryStore // persistent user facts, injected per session (nil disables)
+	ragCmd     string       // path to scripts/rag for the /search command ("" disables it)
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
 	started    time.Time
+
+	lastMemGen int // session generation memory was last injected for
 }
 
-func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, voice *VoiceOut, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
+func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, voice *VoiceOut, memory *MemoryStore, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget, started: time.Now()}
+	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, memory: memory, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget, started: time.Now(), lastMemGen: -1}
 }
 
 func (r *Router) Run(ctx context.Context) error {
@@ -90,6 +96,10 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	// Tag the prompt so Claude knows where it came from. This is plain text
 	// (not JSON) because Claude reads it as natural language.
 	tagged := fmt.Sprintf("[from %s]\n%s", tag, msg.Text)
+
+	// On the first real prompt of a new session, prepend persistent memory so
+	// the assistant knows the user across /new, /project, and restarts.
+	tagged = r.withMemory(tagged)
 
 	sendCtx, cancel := context.WithTimeout(ctx, r.turnBudget)
 	defer cancel()
@@ -145,6 +155,26 @@ func (r *Router) handle(ctx context.Context, msg Inbound) {
 	}
 }
 
+// withMemory prepends the persistent-memory preamble to a prompt once per
+// session (detected via the driver's generation counter), so the facts ride the
+// first real turn after a start / /new / /project without re-injecting on every
+// message.
+func (r *Router) withMemory(tagged string) string {
+	if r.memory == nil || r.ctl == nil {
+		return tagged
+	}
+	gen := r.ctl.Generation()
+	if gen == r.lastMemGen {
+		return tagged
+	}
+	r.lastMemGen = gen
+	if pre := r.memory.Preamble(); pre != "" {
+		r.log.Info("injecting persistent memory", "session_gen", gen)
+		return pre + "\n\n" + tagged
+	}
+	return tagged
+}
+
 // controlHelp lists the bridge commands and is shown by /help.
 const controlHelp = "Session commands:\n" +
 	"/new — start a fresh conversation (clears context)\n" +
@@ -153,6 +183,8 @@ const controlHelp = "Session commands:\n" +
 	"/search <query> — semantic search over attachments + past conversations\n" +
 	"/voice <on|off|auto> — spoken replies: always / never / mirror voice notes\n" +
 	"/speech <language|country> — set the audio language (transcription + voice)\n" +
+	"/memory — list what I remember about you\n" +
+	"/forget <text|all> — drop remembered facts matching text (or everything)\n" +
 	"/status — show the current project and session\n" +
 	"/health — uptime + a snapshot of the bridge's state\n" +
 	"/help — this message"
@@ -172,7 +204,7 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "projects", "search", "voice", "speech", "status", "health", "help":
+	case "new", "project", "projects", "search", "voice", "speech", "memory", "forget", "status", "health", "help":
 		return name, arg, true
 	}
 	return "", "", false
@@ -312,6 +344,36 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 			msg += " The voice model downloads on first use."
 		}
 		reply(msg)
+	case "memory":
+		if r.memory == nil {
+			reply("Persistent memory isn't enabled.")
+			return
+		}
+		facts := r.memory.List()
+		if len(facts) == 0 {
+			reply("🧠 I don't have anything remembered yet. Tell me to remember something, and it'll stick across sessions.")
+			return
+		}
+		reply("🧠 What I remember about you:\n- " + strings.Join(facts, "\n- "))
+	case "forget":
+		if r.memory == nil {
+			reply("Persistent memory isn't enabled.")
+			return
+		}
+		if arg == "" {
+			reply("Usage: /forget <text>  (or /forget all to clear everything)")
+			return
+		}
+		n, err := r.memory.Forget(arg)
+		if err != nil {
+			reply("⚠️  couldn't update memory: " + err.Error())
+			return
+		}
+		if n == 0 {
+			reply("Nothing matched \"" + arg + "\".")
+			return
+		}
+		reply(fmt.Sprintf("🧠 Forgot %d memory(ies).", n))
 	case "projects":
 		if r.projects == nil {
 			reply("Project tracking isn't enabled.")
