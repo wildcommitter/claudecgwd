@@ -557,6 +557,22 @@ func (d *Driver) cancelMenu() {
 	_ = d.sendKeys(keyEsc, keyEsc)
 }
 
+// dumpAwaitScreen logs the current non-empty screen rows. Used by the opt-in
+// menu diagnostic to capture the real render of a parked interactive menu (the
+// transcript doesn't record the parked tool_use, so the screen is ground truth).
+func (d *Driver) dumpAwaitScreen() {
+	d.term.Lock()
+	cols, rows := d.term.Size()
+	var scr []string
+	for y := 0; y < rows; y++ {
+		if r := readRow(d.term, y, cols); r != "" {
+			scr = append(scr, fmt.Sprintf("%2d|%s", y, r))
+		}
+	}
+	d.term.Unlock()
+	d.log.Info("await diagnostic screen (parked turn)", "rows", len(scr), "screen", scr)
+}
+
 // awaitTurn waits for the current turn to reach a terminal stop_reason,
 // handling any AskUserQuestion menus that park the turn along the way.
 // Returns:
@@ -572,11 +588,21 @@ func (d *Driver) awaitTurn(ctx context.Context, since int64, ask ChoiceAsker) (s
 	lastProgressAt := time.Now()
 	lastTextLen := 0
 	lastHasAny := false
+	turnStart := time.Now()
+	diagDumped := false
 
 	for {
 		text, reason, hasAny := d.transcript.replyAndState(since)
 		if terminalStopReason(reason) {
 			return text, nil
+		}
+		// Diagnostic (opt-in via CLAUDECGWD_MENU_DIAG): a parked AskUserQuestion
+		// tool_use is not reliably written to the transcript, so the screen is the
+		// only ground truth for an interactive menu. Dump it once, early, so the
+		// real render can be captured without waiting out the full stall timeout.
+		if !diagDumped && os.Getenv("CLAUDECGWD_MENU_DIAG") != "" && time.Since(turnStart) > 8*time.Second {
+			diagDumped = true
+			d.dumpAwaitScreen()
 		}
 		// Track transcript progress — any new content resets the stall clock.
 		if hasAny != lastHasAny || len(text) != lastTextLen {
