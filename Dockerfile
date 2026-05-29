@@ -64,6 +64,13 @@ ARG RAG_MODEL=BAAI/bge-small-en-v1.5
 COPY --chown=${UID}:${GID} scripts/setup-rag.sh /home/user/setup-rag.sh
 RUN RAG_MODEL=${RAG_MODEL} bash /home/user/setup-rag.sh
 
+# Bundle the TTS engine: a local piper venv + voice model baked in, so spoken
+# (voice-note) replies work in the container with no host dependency. TTS_VOICE
+# must match the runtime voice (config tts.voice).
+ARG TTS_VOICE=en_US-amy-medium
+COPY --chown=${UID}:${GID} scripts/setup-tts.sh /home/user/setup-tts.sh
+RUN TTS_VOICE=${TTS_VOICE} bash /home/user/setup-tts.sh
+
 COPY --chown=${UID}:${GID} --from=builder /out/assistant /home/user/.local/bin/assistant
 
 ENTRYPOINT ["/home/user/.local/bin/assistant", "-config", "/home/user/.config/assistant/config.yaml"]
