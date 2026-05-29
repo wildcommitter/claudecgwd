@@ -71,6 +71,11 @@ ARG TTS_VOICE=en_US-amy-medium
 COPY --chown=${UID}:${GID} scripts/setup-tts.sh /home/user/setup-tts.sh
 RUN TTS_VOICE=${TTS_VOICE} bash /home/user/setup-tts.sh
 
+# Bundle the Google Calendar client venv (auth is provided at runtime via the
+# mounted service-account JSON + GCAL_* env, not baked in).
+COPY --chown=${UID}:${GID} scripts/setup-gcal.sh /home/user/setup-gcal.sh
+RUN bash /home/user/setup-gcal.sh
+
 COPY --chown=${UID}:${GID} --from=builder /out/assistant /home/user/.local/bin/assistant
 
 ENTRYPOINT ["/home/user/.local/bin/assistant", "-config", "/home/user/.config/assistant/config.yaml"]
