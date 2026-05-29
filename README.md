@@ -51,6 +51,8 @@ the TUI parse is only a fallback.
 - **Persistent memory** — tell it durable facts ("remember I prefer metric")
   and they're injected into every future session; managed with `/memory` and
   `/forget`.
+- **Google Calendar** — read your agenda and create events ("what's on
+  Friday?", "add lunch with Ana 1pm Thursday") via a service account.
 - **Proactive notifications** — background jobs can push to every surface.
 - **Resilient** — outbound sends retry with backoff and the bridges reconnect
   on a network drop instead of taking the process down.
