@@ -1,5 +1,5 @@
 [Unit]
-Description=Personal Claude assistant (Telegram + IRC bridge)
+Description=Personal Claude assistant (Telegram + WhatsApp bridge)
 After=network-online.target
 Wants=network-online.target
 
