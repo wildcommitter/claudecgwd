@@ -241,7 +241,12 @@ func (w *WhatsApp) PushToOwner(ctx context.Context, text string) error {
 	}
 	to := w.client.Store.ID.ToNonAD()
 	for _, chunk := range chunkText(text, 4000) {
-		resp, err := w.client.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(chunk)})
+		var resp whatsmeow.SendResponse
+		err := withRetry(ctx, w.log, "whatsapp notify", func() error {
+			var e error
+			resp, e = w.client.SendMessage(ctx, to, &waE2E.Message{Conversation: proto.String(chunk)})
+			return e
+		})
 		if err != nil {
 			return fmt.Errorf("whatsapp notify: %w", err)
 		}
@@ -277,6 +282,9 @@ func (w *WhatsApp) handleEvent(evt interface{}) {
 		w.onMessage(v)
 	case *events.Connected:
 		w.log.Info("whatsapp: connected")
+	case *events.Disconnected:
+		// whatsmeow reconnects on its own (EnableAutoReconnect); just surface it.
+		w.log.Warn("whatsapp: disconnected; awaiting auto-reconnect")
 	case *events.LoggedOut:
 		w.log.Warn("whatsapp: logged out (re-pair needed)", "on_connect", v.OnConnect)
 	}
@@ -466,7 +474,12 @@ func (o *waOrigin) Reply(ctx context.Context, text string) error {
 	// WhatsApp tolerates long messages, but keep chunks reasonable.
 	chunks := chunkText(text, 4000)
 	for i, chunk := range chunks {
-		resp, err := o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
+		var resp whatsmeow.SendResponse
+		err := withRetry(ctx, o.bridge.log, "whatsapp send", func() error {
+			var e error
+			resp, e = o.bridge.client.SendMessage(ctx, o.chat, &waE2E.Message{Conversation: proto.String(chunk)})
+			return e
+		})
 		if err != nil {
 			o.bridge.log.Warn("whatsapp: send failed", "to", o.chat.String(), "err", err)
 			return fmt.Errorf("whatsapp send: %w", err)

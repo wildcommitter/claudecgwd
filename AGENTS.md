@@ -90,6 +90,13 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   turn. To push unprompted (e.g. a finished background job), write to the
   notify FIFO via `scripts/notify.sh "msg"` — the Notifier fans it out to all
   surfaces.
+- **Network resilience:** outbound sends (replies, notifications, QR) go
+  through `withRetry` (`retry.go`) — bounded exponential backoff so a brief blip
+  doesn't drop a message (at-least-once; a retry can rarely duplicate). Bridges
+  run under `superviseBridge` in `cmd/assistant`: a `Run()` that returns on a
+  network error is restarted with backoff instead of cancelling the whole
+  process. Inbound is already covered upstream — the Telegram poller retries
+  `getUpdates` internally and whatsmeow auto-reconnects.
 - **Reminders:** when the user asks to be reminded of something later, run
   `scripts/remind <when> <message>` (`<when>` is anything `date -d` parses,
   e.g. `"18:00"`, `"tomorrow 9am"`, `"+25 minutes"`). The scheduler

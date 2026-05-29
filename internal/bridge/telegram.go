@@ -31,11 +31,12 @@ type Telegram struct {
 	log     *slog.Logger
 	inbound chan<- Inbound
 
-	bot      *bot.Bot
-	allowed  map[int64]struct{}
-	inboxDir string        // where sent files are downloaded
-	stt      *Transcriber  // optional voice/audio transcription
-	ready    chan struct{} // closed once bot is set, so QRSink can wait for startup
+	bot       *bot.Bot
+	allowed   map[int64]struct{}
+	inboxDir  string        // where sent files are downloaded
+	stt       *Transcriber  // optional voice/audio transcription
+	ready     chan struct{} // closed once bot is set, so QRSink can wait for startup
+	readyOnce sync.Once     // guards the ready close across bridge restarts
 
 	// Pending AskUserQuestion waiters, keyed by a per-question token embedded in
 	// inline-button callback data.
@@ -68,7 +69,7 @@ func (t *Telegram) Run(ctx context.Context) error {
 		return fmt.Errorf("telegram bot: %w", err)
 	}
 	t.bot = b
-	close(t.ready)
+	t.readyOnce.Do(func() { close(t.ready) })
 	t.log.Info("telegram bridge starting")
 	b.Start(ctx)
 	return nil
@@ -316,7 +317,11 @@ func (o *tgOrigin) Reply(ctx context.Context, text string) error {
 		if i == 0 && o.replyToID != 0 {
 			params.ReplyParameters = &models.ReplyParameters{MessageID: o.replyToID}
 		}
-		if _, err := o.bridge.bot.SendMessage(ctx, params); err != nil {
+		err := withRetry(ctx, o.bridge.log, "telegram reply", func() error {
+			_, e := o.bridge.bot.SendMessage(ctx, params)
+			return e
+		})
+		if err != nil {
 			return fmt.Errorf("telegram send: %w", err)
 		}
 		if i+1 < len(chunks) {
@@ -340,10 +345,14 @@ func (t *Telegram) SendTextToOwner(ctx context.Context, text string) error {
 		return fmt.Errorf("no allowed telegram users")
 	}
 	for _, chunk := range chunkText(text, tgMaxChars) {
-		if _, err := t.bot.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: t.cfg.AllowedUserIDs[0],
-			Text:   chunk,
-		}); err != nil {
+		err := withRetry(ctx, t.log, "telegram notify", func() error {
+			_, e := t.bot.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: t.cfg.AllowedUserIDs[0],
+				Text:   chunk,
+			})
+			return e
+		})
+		if err != nil {
 			return fmt.Errorf("telegram notify: %w", err)
 		}
 	}
@@ -366,12 +375,14 @@ func (t *Telegram) SendQRToOwner(ctx context.Context, png []byte, caption string
 	if len(t.cfg.AllowedUserIDs) == 0 {
 		return fmt.Errorf("no allowed telegram users to send QR to")
 	}
-	_, err := t.bot.SendDocument(ctx, &bot.SendDocumentParams{
-		ChatID:   t.cfg.AllowedUserIDs[0],
-		Document: &models.InputFileUpload{Filename: "whatsapp-qr.png", Data: bytes.NewReader(png)},
-		Caption:  caption,
+	return withRetry(ctx, t.log, "telegram qr", func() error {
+		_, e := t.bot.SendDocument(ctx, &bot.SendDocumentParams{
+			ChatID:   t.cfg.AllowedUserIDs[0],
+			Document: &models.InputFileUpload{Filename: "whatsapp-qr.png", Data: bytes.NewReader(png)},
+			Caption:  caption,
+		})
+		return e
 	})
-	return err
 }
 
 // AskChoices presents each question via a Telegram inline keyboard and blocks

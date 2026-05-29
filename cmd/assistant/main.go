@@ -77,10 +77,7 @@ func run(configPath string, logger *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := tg.Run(ctx); err != nil {
-				logger.Error("telegram exited", "err", err)
-				cancel()
-			}
+			superviseBridge(ctx, "telegram", logger, tg.Run)
 		}()
 	}
 
@@ -95,10 +92,7 @@ func run(configPath string, logger *slog.Logger) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := wa.Run(ctx); err != nil {
-				logger.Error("whatsapp exited", "err", err)
-				cancel()
-			}
+			superviseBridge(ctx, "whatsapp", logger, wa.Run)
 		}()
 	}
 
@@ -146,4 +140,49 @@ func run(configPath string, logger *slog.Logger) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+// superviseBridge runs a bridge's Run loop and restarts it with exponential
+// backoff if it returns unexpectedly — e.g. a network outage at startup makes
+// the initial connect fail. Previously any such error cancelled the whole
+// process; now only a real shutdown (ctx cancelled) stops the supervisor, so a
+// transient outage no longer takes the assistant down. A bridge that ran
+// healthily for a while before failing resets the backoff so it reconnects
+// promptly.
+func superviseBridge(ctx context.Context, name string, log *slog.Logger, run func(context.Context) error) {
+	const (
+		base       = time.Second
+		maxBackoff = 30 * time.Second
+		healthyFor = time.Minute
+	)
+	attempt := 0
+	for {
+		start := time.Now()
+		err := run(ctx)
+		if ctx.Err() != nil {
+			return // shutting down — expected
+		}
+		if time.Since(start) >= healthyFor {
+			attempt = 0 // ran healthily, treat the next failure as fresh
+		}
+		shift := attempt
+		if shift > 5 { // clamp so the shift can't overflow on a long outage
+			shift = 5
+		}
+		backoff := base << shift
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+		attempt++
+		if err != nil {
+			log.Error(name+" bridge exited; restarting", "err", err, "restart_in", backoff)
+		} else {
+			log.Warn(name+" bridge returned without error; restarting", "restart_in", backoff)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+	}
 }
