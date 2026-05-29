@@ -37,10 +37,11 @@ internal/claude driver.go (PTY + vt10x), transcript.go (read replies from
 internal/bridge router.go, telegram.go, whatsapp.go, notify.go, scheduler.go,
                 projects.go, files.go, stt.go, types.go (Origin/Bridge/Inbound)
 internal/config config.go (single Config struct, yaml)
-scripts/        install.sh, watch-ci.sh, notify.sh, remind, transcribe.py
+scripts/        install.sh, watch-ci.sh, notify.sh, remind, transcribe.py,
+                rag / rag.py / setup-rag.sh (local RAG search)
 deploy/         systemd units, Quadlet, secrets.env.example
 docs/DOCKER.md  sandboxed Podman/Docker deployment
-.claude/skills/ project skills (received-files, project-tracker)
+.claude/skills/ project skills (received-files, project-tracker, rag-search)
 ```
 
 ## Architecture & invariants
@@ -79,6 +80,12 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   Read tool — so a sent photo is a vision turn, not just a catalog entry.
 - **Voice/audio** is transcribed locally (faster-whisper venv via
   `scripts/transcribe.py`) and fed in as the prompt text.
+- **RAG search** over attachments + conversation transcripts uses local
+  embeddings (fastembed/ONNX, `scripts/rag`; SQLite index at
+  `~/.local/share/assistant/rag/index.db`). `/search <query>` returns raw ranked
+  snippets (router shells to `scripts/rag query`); the `rag-search` skill is the
+  auto-retrieval side — query the index mid-turn and synthesize. Indexing is
+  incremental (immutable inbox files skipped; transcripts read from a cursor).
 - **Proactive notifications:** a reply only reaches the user on an inbound
   turn. To push unprompted (e.g. a finished background job), write to the
   notify FIFO via `scripts/notify.sh "msg"` — the Notifier fans it out to all

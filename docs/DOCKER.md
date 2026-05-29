@@ -18,6 +18,11 @@ agent running with `--permission-mode bypassPermissions`) and **portability**
   WHISPER_MODEL=small`). So STT works in the container with no host dependency
   — but it adds ~600 MB to the image. Keep `WHISPER_MODEL` in sync with
   `stt.model` in config.
+- **RAG search bundled**: a second venv with local (ONNX/fastembed) embeddings
+  and the model baked in (`scripts/setup-rag.sh`, `--build-arg
+  RAG_MODEL=BAAI/bge-small-en-v1.5`). Powers `/search` and the `rag-search`
+  skill over attachments + conversations — no host dependency, nothing leaves
+  the box. The index lives under the mounted store volume, so it persists.
 - Runs as uid/gid `1000` (matching the host user) so bind-mounted files keep
   their ownership.
 
