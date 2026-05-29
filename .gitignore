@@ -16,3 +16,6 @@
 .idea/
 .vscode/
 *.swp
+
+# Runtime scheduler lock (not source)
+.claude/scheduled_tasks.lock
