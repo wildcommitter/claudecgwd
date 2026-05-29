@@ -111,9 +111,10 @@ func (t *Telegram) handle(ctx context.Context, b *bot.Bot, update *models.Update
 		return
 	}
 
-	// Other attachment? Download it (off the update loop) and notify the session.
+	// Other attachment? Download it (off the update loop) and notify the
+	// session. Images get fed in as a vision turn (see receivedNotice).
 	if fileID, name, ok := tgAttachment(msg); ok {
-		go t.saveAttachment(ctx, fileID, name, msg.Caption, origin)
+		go t.saveAttachment(ctx, fileID, name, msg.Caption, tgIsImage(msg), origin)
 		return
 	}
 
@@ -149,8 +150,20 @@ func tgAttachment(m *models.Message) (fileID, name string, ok bool) {
 	return "", "", false
 }
 
+// tgIsImage reports whether the message's attachment is a still image, so it
+// can be fed to Claude as a vision turn rather than catalogued as a plain file.
+func tgIsImage(m *models.Message) bool {
+	if len(m.Photo) > 0 {
+		return true
+	}
+	if m.Document != nil && strings.HasPrefix(m.Document.MimeType, "image/") {
+		return true
+	}
+	return false
+}
+
 // saveAttachment downloads a Telegram file to the inbox and enqueues a notice.
-func (t *Telegram) saveAttachment(ctx context.Context, fileID, name, caption string, origin *tgOrigin) {
+func (t *Telegram) saveAttachment(ctx context.Context, fileID, name, caption string, isImage bool, origin *tgOrigin) {
 	data, err := t.downloadFile(ctx, fileID)
 	if err != nil {
 		t.log.Warn("telegram: file download failed", "err", err)
@@ -163,11 +176,8 @@ func (t *Telegram) saveAttachment(ctx context.Context, fileID, name, caption str
 		_ = origin.Reply(ctx, "⚠️  couldn't save that file: "+err.Error())
 		return
 	}
-	t.log.Info("telegram: saved incoming file", "path", path, "bytes", len(data))
-	text := "[file received via telegram — saved to " + path + "]"
-	if caption != "" {
-		text += "\n" + caption
-	}
+	t.log.Info("telegram: saved incoming file", "path", path, "bytes", len(data), "image", isImage)
+	text := receivedNotice("telegram", path, caption, isImage)
 	select {
 	case t.inbound <- Inbound{Text: text, Origin: origin}:
 	default:

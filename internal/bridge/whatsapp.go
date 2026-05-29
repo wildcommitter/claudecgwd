@@ -151,27 +151,28 @@ func (w *WhatsApp) consumeQR(ctx context.Context, qrChan <-chan whatsmeow.QRChan
 	}
 }
 
-// waMedia reports a suggested filename and caption if the message carries a
+// waMedia reports a suggested filename, caption, and whether the attachment is
+// a still image (fed to Claude as a vision turn) if the message carries a
 // downloadable attachment.
-func waMedia(m *waE2E.Message) (name, caption string, ok bool) {
+func waMedia(m *waE2E.Message) (name, caption string, isImage, ok bool) {
 	switch {
 	case m.GetImageMessage() != nil:
-		return "image.jpg", m.GetImageMessage().GetCaption(), true
+		return "image.jpg", m.GetImageMessage().GetCaption(), true, true
 	case m.GetDocumentMessage() != nil:
 		d := m.GetDocumentMessage()
 		n := d.GetFileName()
 		if n == "" {
 			n = "document"
 		}
-		return n, d.GetCaption(), true
+		return n, d.GetCaption(), strings.HasPrefix(d.GetMimetype(), "image/"), true
 	case m.GetVideoMessage() != nil:
-		return "video.mp4", m.GetVideoMessage().GetCaption(), true
+		return "video.mp4", m.GetVideoMessage().GetCaption(), false, true
 	case m.GetAudioMessage() != nil:
-		return "audio.ogg", "", true
+		return "audio.ogg", "", false, true
 	case m.GetStickerMessage() != nil:
-		return "sticker.webp", "", true
+		return "sticker.webp", "", false, true
 	}
-	return "", "", false
+	return "", "", false, false
 }
 
 // transcribeAudio downloads a WhatsApp voice/audio message, transcribes it, and
@@ -208,7 +209,7 @@ func (w *WhatsApp) transcribeAudio(msg *waE2E.Message, origin *waOrigin) {
 }
 
 // saveMedia downloads a WhatsApp attachment to the inbox and enqueues a notice.
-func (w *WhatsApp) saveMedia(msg *waE2E.Message, name, caption string, origin *waOrigin) {
+func (w *WhatsApp) saveMedia(msg *waE2E.Message, name, caption string, isImage bool, origin *waOrigin) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	data, err := w.client.DownloadAny(ctx, msg)
@@ -223,11 +224,8 @@ func (w *WhatsApp) saveMedia(msg *waE2E.Message, name, caption string, origin *w
 		_ = origin.Reply(ctx, "⚠️  couldn't save that file: "+err.Error())
 		return
 	}
-	w.log.Info("whatsapp: saved incoming file", "path", path, "bytes", len(data))
-	text := "[file received via whatsapp — saved to " + path + "]"
-	if caption != "" {
-		text += "\n" + caption
-	}
+	w.log.Info("whatsapp: saved incoming file", "path", path, "bytes", len(data), "image", isImage)
+	text := receivedNotice("whatsapp", path, caption, isImage)
 	select {
 	case w.inbound <- Inbound{Text: text, Origin: origin}:
 	default:
@@ -337,9 +335,9 @@ func (w *WhatsApp) onMessage(m *events.Message) {
 	// File attachment? Download it (off the event goroutine) and notify the
 	// session with the saved path. Checked before the empty-text return since
 	// media messages carry no conversation text.
-	if name, caption, ok := waMedia(m.Message); ok {
-		w.log.Info("whatsapp: accepted file", "self_chat", selfChat)
-		go w.saveMedia(m.Message, name, caption, origin)
+	if name, caption, isImage, ok := waMedia(m.Message); ok {
+		w.log.Info("whatsapp: accepted file", "self_chat", selfChat, "image", isImage)
+		go w.saveMedia(m.Message, name, caption, isImage, origin)
 		return
 	}
 

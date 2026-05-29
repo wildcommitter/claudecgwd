@@ -42,6 +42,24 @@ func saveInbox(dir, source, origName string, data []byte) (string, error) {
 	return path, nil
 }
 
+// receivedNotice builds the inbound prompt text announcing a file saved to the
+// inbox. For images it tells Claude to actually view the file (its Read tool
+// renders images visually), so a sent photo becomes a vision turn rather than
+// just a catalog entry. source is the surface ("telegram"/"whatsapp").
+func receivedNotice(source, path, caption string, isImage bool) string {
+	var b strings.Builder
+	if isImage {
+		fmt.Fprintf(&b, "[image received via %s — saved to %s]\n", source, path)
+		b.WriteString("Open it with the Read tool to see its contents, then respond.")
+	} else {
+		fmt.Fprintf(&b, "[file received via %s — saved to %s]", source, path)
+	}
+	if caption != "" {
+		b.WriteString("\n" + caption)
+	}
+	return b.String()
+}
+
 // sanitizeName makes an arbitrary filename safe for the inbox directory.
 func sanitizeName(s string) string {
 	s = strings.TrimSpace(s)
