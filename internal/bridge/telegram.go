@@ -428,23 +428,40 @@ func (t *Telegram) SendFileToOwner(ctx context.Context, path, caption string) er
 	}
 	chatID := t.cfg.AllowedUserIDs[0]
 	name := filepath.Base(path)
-	return withRetry(ctx, t.log, "telegram file", func(actx context.Context) error {
+	image := isImageFile(path)
+	var sent *models.Message
+	if err := withRetry(ctx, t.log, "telegram file", func(actx context.Context) error {
 		var e error
-		if isImageFile(path) {
-			_, e = t.bot.SendPhoto(actx, &bot.SendPhotoParams{
+		if image {
+			sent, e = t.bot.SendPhoto(actx, &bot.SendPhotoParams{
 				ChatID:  chatID,
 				Photo:   &models.InputFileUpload{Filename: name, Data: bytes.NewReader(data)},
 				Caption: caption,
 			})
 		} else {
-			_, e = t.bot.SendDocument(actx, &bot.SendDocumentParams{
+			sent, e = t.bot.SendDocument(actx, &bot.SendDocumentParams{
 				ChatID:   chatID,
 				Document: &models.InputFileUpload{Filename: name, Data: bytes.NewReader(data)},
 				Caption:  caption,
 			})
 		}
 		return e
-	})
+	}); err != nil {
+		return err
+	}
+	// Telegram echoes the stored message (with the attached file) on success. A
+	// nil result with no error would be a silent no-op — surface it as an error
+	// rather than reporting a phantom delivery, and log the confirmed send so
+	// the FIFO -> file path is observable end to end.
+	if sent == nil {
+		return fmt.Errorf("telegram accepted %s but returned no message", name)
+	}
+	kind := "document"
+	if image {
+		kind = "photo"
+	}
+	t.log.Info("sent file to owner", "file", name, "bytes", len(data), "msg_id", sent.ID, "as", kind)
+	return nil
 }
 
 // SendQRToOwner sends a QR image (e.g. a WhatsApp pairing code) to the first

@@ -86,7 +86,11 @@ func (n *Notifier) Run(ctx context.Context) error {
 		}
 		text := decodeNotif(line)
 		if d, ok := parseMediaDirective(text); ok {
-			n.log.Info("broadcasting media", "file", d.File)
+			if len(n.media) == 0 {
+				n.log.Warn("media directive but no media surfaces configured; cannot deliver file", "file", d.File)
+				continue
+			}
+			n.log.Info("broadcasting media", "file", d.File, "surfaces", len(n.media))
 			for _, m := range n.media {
 				if err := m(ctx, d.File, d.Caption); err != nil {
 					n.log.Warn("media push failed", "err", err)
