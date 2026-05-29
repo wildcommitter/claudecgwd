@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# RAG over the assistant's attachments + conversations — the single entrypoint
+# the bridge and the rag-search skill call. Wraps the local fastembed venv so
+# callers don't need to know about Python.
+#
+#   rag index [--scope both|attachments|conversations] [--project-only]
+#   rag query "<text>" [-k N] [--json]
+#   rag stats
+#
+# Env overrides: RAG_VENV (default ~/.local/share/assistant/rag-venv),
+# RAG_MODEL (default BAAI/bge-small-en-v1.5).
+
+set -euo pipefail
+
+VENV="${RAG_VENV:-$HOME/.local/share/assistant/rag-venv}"
+here="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ ! -x "$VENV/bin/python" ]]; then
+  echo "RAG venv missing at $VENV (run scripts/setup-rag.sh)" >&2
+  exit 1
+fi
+
+exec "$VENV/bin/python" "$here/rag.py" "$@"

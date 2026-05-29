@@ -57,6 +57,13 @@ ARG WHISPER_MODEL=small
 COPY --chown=${UID}:${GID} scripts/setup-stt.sh /home/user/setup-stt.sh
 RUN WHISPER_MODEL=${WHISPER_MODEL} bash /home/user/setup-stt.sh
 
+# Bundle the RAG engine: a local (ONNX/fastembed) embeddings venv with the model
+# baked in, so semantic search over attachments + conversations works in the
+# container with no host dependency. RAG_MODEL must match the runtime model.
+ARG RAG_MODEL=BAAI/bge-small-en-v1.5
+COPY --chown=${UID}:${GID} scripts/setup-rag.sh /home/user/setup-rag.sh
+RUN RAG_MODEL=${RAG_MODEL} bash /home/user/setup-rag.sh
+
 COPY --chown=${UID}:${GID} --from=builder /out/assistant /home/user/.local/bin/assistant
 
 ENTRYPOINT ["/home/user/.local/bin/assistant", "-config", "/home/user/.config/assistant/config.yaml"]
