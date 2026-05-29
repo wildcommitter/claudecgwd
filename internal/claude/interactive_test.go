@@ -4,7 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/hinshun/vt10x"
 )
 
 func newTestTranscriptInteractive(t *testing.T) (*transcriptReader, string) {
@@ -90,5 +93,102 @@ func TestSelectionKeys_MultiSelect(t *testing.T) {
 	want := []string{keyUp, keyUp, keyUp, keySpace, keyDown, keyDown, keySpace, keyEnter}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("multi-select keys:\n got %v\nwant %v", got, want)
+	}
+}
+
+func TestStrippedMenuRow(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"❯ Postgres", "Postgres", true},
+		{"   ❯ Postgres", "Postgres", true},
+		{"│ > SQLite", "SQLite", true}, // box border + ASCII caret
+		{"❯ ◉ MySQL  (recommended)", "◉ MySQL  (recommended)", true},
+		{"  SQLite", "", false}, // unmarked row
+		{"", "", false},
+	}
+	for _, c := range cases {
+		got, ok := strippedMenuRow(c.in)
+		if ok != c.ok || got != c.want {
+			t.Errorf("strippedMenuRow(%q) = (%q,%v), want (%q,%v)", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestMatchOptionIndex(t *testing.T) {
+	labels := []string{"Postgres", "SQLite", "MySQL"}
+	cases := []struct {
+		screen string
+		want   int
+	}{
+		{"Postgres", 0},               // exact
+		{"sqlite", 1},                 // case-insensitive exact
+		{"◉ MySQL  (recommended)", 2}, // checkbox glyph + suffix → unique substring
+		{"Postg", 0},                  // truncated, unique prefix
+		{"", -1},
+		{"Mongo", -1}, // no match
+	}
+	for _, c := range cases {
+		if got := matchOptionIndex(c.screen, labels); got != c.want {
+			t.Errorf("matchOptionIndex(%q) = %d, want %d", c.screen, got, c.want)
+		}
+	}
+	// Ambiguous substring → no false positive.
+	if got := matchOptionIndex("cat and category", []string{"cat", "category"}); got != -1 {
+		t.Errorf("ambiguous substring should not match, got %d", got)
+	}
+}
+
+func TestNextNavKey(t *testing.T) {
+	if k, done := nextNavKey(2, 2); !done || k != "" {
+		t.Errorf("at target: got (%q,%v), want (\"\",true)", k, done)
+	}
+	if k, done := nextNavKey(0, 2); done || k != keyDown {
+		t.Errorf("below target: got (%q,%v), want (down,false)", k, done)
+	}
+	if k, done := nextNavKey(3, 1); done || k != keyUp {
+		t.Errorf("above target: got (%q,%v), want (up,false)", k, done)
+	}
+	if k, done := nextNavKey(-1, 2); done || k != keyDown {
+		t.Errorf("unknown position: got (%q,%v), want (down,false)", k, done)
+	}
+}
+
+// renderMenu feeds plain lines into a fresh vt10x terminal so tests can read
+// them back the same way the driver reads the live TUI screen.
+func renderMenu(t *testing.T, lines ...string) vt10x.Terminal {
+	t.Helper()
+	term := vt10x.New(vt10x.WithSize(80, 24))
+	if _, err := term.Write([]byte(strings.Join(lines, "\r\n") + "\r\n")); err != nil {
+		t.Fatalf("term write: %v", err)
+	}
+	return term
+}
+
+// The closed-loop fix hinges on reading which option the cursor is on straight
+// off the rendered screen — exercise that against realistic menu renders.
+func TestCurrentMenuIndex_ReadsHighlightedOption(t *testing.T) {
+	labels := []string{"Postgres", "SQLite", "MySQL"}
+	cases := []struct {
+		name  string
+		lines []string
+		want  int
+	}{
+		{"cursor on first", []string{"Which database?", "", "❯ Postgres", "  SQLite", "  MySQL"}, 0},
+		{"cursor on middle", []string{"Which database?", "", "  Postgres", "❯ SQLite", "  MySQL"}, 1},
+		{"box border + ascii caret", []string{"│ Which database?", "│ > Postgres", "│   SQLite"}, 0},
+		{"checkbox glyph + suffix", []string{"  Postgres", "❯ ◉ SQLite  (recommended)", "  MySQL"}, 1},
+		{"no marker visible", []string{"Postgres", "SQLite", "MySQL"}, -1},
+		{"marked input prompt, no label match", []string{"❯ tell me more about it"}, -1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &Driver{term: renderMenu(t, c.lines...)}
+			if got := d.currentMenuIndex(labels); got != c.want {
+				t.Fatalf("currentMenuIndex = %d, want %d", got, c.want)
+			}
+		})
 	}
 }
