@@ -480,12 +480,20 @@ func (d *Driver) buildArgs() []string {
 	}
 	switch d.cfg.PermissionMode {
 	case "bypassPermissions":
-		// CLI's own flag for the full bypass.
+		// CLI's own flag for the full bypass. NOTE: bypass mode auto-declines the
+		// model's AskUserQuestion tool, so interactive menus never render. Use
+		// "default" + allowed_tools if you need them.
 		args = append(args, "--dangerously-skip-permissions")
 	case "":
 		// no-op, use the binary's default
 	default:
+		// e.g. "default": tools in allowed_tools run without a prompt; anything
+		// else pops an approval menu the driver auto-approves. This is what lets
+		// AskUserQuestion render while keeping autonomy.
 		args = append(args, "--permission-mode", d.cfg.PermissionMode)
+		if len(d.cfg.AllowedTools) > 0 {
+			args = append(args, "--allowedTools", strings.Join(d.cfg.AllowedTools, ","))
+		}
 	}
 	args = append(args, d.cfg.ExtraArgs...)
 	return args

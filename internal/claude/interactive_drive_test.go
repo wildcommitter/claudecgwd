@@ -280,6 +280,65 @@ func TestDriveByScreen_RecoversWhenEnterDropped(t *testing.T) {
 	}
 }
 
+func TestApprovalMenuVisible_DistinguishesFromQuestion(t *testing.T) {
+	// The real tool-approval render (captured from claude 2.1.157).
+	approval := renderMenu(t,
+		"● Write(/tmp/probe.txt)",
+		" Do you want to create probe.txt?",
+		"❯ 1. Yes",
+		"  2. Yes, allow all edits in tmp/ during this session",
+		"  3. No",
+		" Esc to cancel · Tab to amend",
+	)
+	if d := (&Driver{term: approval}); !d.approvalMenuVisible() {
+		t.Fatal("approval menu not detected")
+	} else if !d.highlightedYes() {
+		t.Fatal("cursor should be on the Yes row")
+	}
+
+	// An AskUserQuestion menu must NOT be mistaken for an approval menu.
+	question := renderMenu(t,
+		" ☐ Color",
+		"Which do you choose?",
+		"❯ 1. Red",
+		"  2. Blue",
+		"  3. Type something",
+		" Enter to select · ↑/↓ to navigate · Esc to cancel",
+	)
+	if (&Driver{term: question}).approvalMenuVisible() {
+		t.Fatal("AskUserQuestion menu wrongly detected as an approval menu")
+	}
+
+	// A normal screen → not an approval menu.
+	normal := renderMenu(t, "● Bash(ls)", "  file.txt", "  dir/")
+	if (&Driver{term: normal}).approvalMenuVisible() {
+		t.Fatal("normal screen wrongly detected as an approval menu")
+	}
+}
+
+func TestApproveToolPrompt_SelectsYesNotNo(t *testing.T) {
+	fastMenuTiming(t)
+	// Cursor starts on "No"; approveToolPrompt must move to a Yes and submit it.
+	labels := []string{"Yes", "Yes, allow all edits this session", "No"}
+	m := newFakeMenu(labels, false, false, 2)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pw.Close()
+	go m.pump(pr)
+	d := &Driver{ptyFile: pw, term: m.term, log: discardLog()}
+	d.approveToolPrompt()
+	select {
+	case <-m.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("approval never submitted")
+	}
+	if got := m.result(); len(got) != 1 || got[0] == 2 {
+		t.Fatalf("approved option %v — must be a Yes (0 or 1), never No (2)", got)
+	}
+}
+
 func TestDriveByScreen_MultiSelectTogglesExactSet(t *testing.T) {
 	fastMenuTiming(t)
 	labels := []string{"Mountains", "Beach", "City", "Forest"}

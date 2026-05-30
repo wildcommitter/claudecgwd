@@ -557,6 +557,73 @@ func (d *Driver) cancelMenu() {
 	_ = d.sendKeys(keyEsc, keyEsc)
 }
 
+// approvalMenuVisible reports whether a tool-permission confirmation menu is on
+// screen. It's recognized by its distinctive shape — a "Do you want to …?"
+// question with Yes/No options and a "Tab to amend" footer — which the
+// AskUserQuestion menu (whose footer is "Enter to select · ↑/↓ to navigate")
+// does not have, so the two are never confused.
+func (d *Driver) approvalMenuVisible() bool {
+	d.term.Lock()
+	defer d.term.Unlock()
+	cols, rows := d.term.Size()
+	var amend, doYouWant, yes, no bool
+	for y := 0; y < rows; y++ {
+		line := strings.ToLower(readRow(d.term, y, cols))
+		if line == "" {
+			continue
+		}
+		if strings.Contains(line, "tab to amend") {
+			amend = true
+		}
+		if strings.Contains(line, "do you want to") {
+			doYouWant = true
+		}
+		opt := strings.TrimSpace(strings.TrimLeft(line, " \t│❯>.0123456789"))
+		if strings.HasPrefix(opt, "yes") {
+			yes = true
+		}
+		if opt == "no" || strings.HasPrefix(opt, "no ") || strings.HasPrefix(opt, "no,") {
+			no = true
+		}
+	}
+	// "Tab to amend" is unique to this menu; the Yes/No+question shape is a
+	// fallback signal in case the footer scrolls off.
+	return amend || (doYouWant && yes && no)
+}
+
+// approveToolPrompt selects the first "Yes" on an open approval menu and
+// submits it, confirming the cursor is on a Yes row before pressing Enter so a
+// non-default cursor position can't approve the wrong row.
+func (d *Driver) approveToolPrompt() {
+	for step := 0; step < 6; step++ {
+		if d.highlightedYes() {
+			break
+		}
+		if err := d.sendKeys(keyUp); err != nil { // "Yes" is the top option
+			return
+		}
+		time.Sleep(navStepDelay)
+	}
+	_ = d.sendKeys(keyEnter)
+	time.Sleep(submitConfirmWindow) // let the menu close before the next poll
+}
+
+// highlightedYes reports whether the cursor-marked menu row is a "Yes" option.
+func (d *Driver) highlightedYes() bool {
+	d.term.Lock()
+	defer d.term.Unlock()
+	cols, rows := d.term.Size()
+	for y := 0; y < rows; y++ {
+		if opt, ok := strippedMenuRow(readRow(d.term, y, cols)); ok {
+			o := strings.TrimSpace(strings.ToLower(strings.TrimLeft(opt, " .0123456789")))
+			if strings.HasPrefix(o, "yes") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // dumpAwaitScreen logs the current non-empty screen rows. Used by the opt-in
 // menu diagnostic to capture the real render of a parked interactive menu (the
 // transcript doesn't record the parked tool_use, so the screen is ground truth).
@@ -609,6 +676,24 @@ func (d *Driver) awaitTurn(ctx context.Context, since int64, ask ChoiceAsker) (s
 			lastProgressAt = time.Now()
 			lastTextLen = len(text)
 			lastHasAny = hasAny
+		}
+		// Auto-approve a parked tool-permission menu. Outside bypass mode (which
+		// we use specifically so AskUserQuestion renders), a tool that isn't in
+		// allowed_tools pops a "Do you want to …? Yes/No" menu and parks the turn.
+		// The operator already granted bypass-level trust, and there's no human at
+		// this TUI to click, so approve it rather than stall. Distinct from an
+		// AskUserQuestion (handled below from the transcript): this is recognized
+		// on screen by its Yes/No + "Tab to amend" shape.
+		if d.approvalMenuVisible() {
+			d.log.Info("auto-approving tool-permission prompt")
+			d.approveToolPrompt()
+			lastProgressAt = time.Now()
+			select {
+			case <-ctx.Done():
+				return text, ctx.Err()
+			case <-time.After(poll):
+			}
+			continue
 		}
 		if stallAfter > 0 && time.Since(lastProgressAt) >= stallAfter {
 			d.log.Warn("turn stalled; cancelling in-flight request",

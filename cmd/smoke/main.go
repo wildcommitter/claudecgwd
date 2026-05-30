@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,8 @@ func main() {
 		binary  = flag.String("binary", "claude", "path to claude binary")
 		workdir = flag.String("workdir", ".", "working directory for claude")
 		prompt  = flag.String("prompt", "Reply with exactly: hi from smoke", "prompt to send")
+		perm    = flag.String("perm", "bypassPermissions", "permission_mode (bypassPermissions|default|...)")
+		allowed = flag.String("allowed", "", "space-separated allowed_tools (for non-bypass modes)")
 		debug   = flag.Bool("debug", false, "verbose logging")
 	)
 	flag.Parse()
@@ -45,9 +48,12 @@ func main() {
 		Binary:         *binary,
 		Workdir:        *workdir,
 		SessionID:      *session,
-		PermissionMode: "bypassPermissions",
+		PermissionMode: *perm,
 		PtyCols:        200,
 		PtyRows:        500,
+	}
+	if *allowed != "" {
+		cfg.AllowedTools = strings.Fields(*allowed)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

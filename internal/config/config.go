@@ -9,9 +9,9 @@ import (
 )
 
 type Config struct {
-	Claude   ClaudeConfig   `yaml:"claude"`
-	Telegram TelegramConfig `yaml:"telegram"`
-	WhatsApp WhatsAppConfig `yaml:"whatsapp"`
+	Claude    ClaudeConfig    `yaml:"claude"`
+	Telegram  TelegramConfig  `yaml:"telegram"`
+	WhatsApp  WhatsAppConfig  `yaml:"whatsapp"`
 	Files     FilesConfig     `yaml:"files"`
 	Speech    SpeechConfig    `yaml:"speech"`
 	STT       STTConfig       `yaml:"stt"`
@@ -97,6 +97,13 @@ type ClaudeConfig struct {
 	PtyCols        uint16   `yaml:"pty_cols"`
 	PtyRows        uint16   `yaml:"pty_rows"`
 	ExtraArgs      []string `yaml:"extra_args,omitempty"`
+	// AllowedTools is passed as --allowedTools when permission_mode is a
+	// non-bypass mode (e.g. "default"). Listed tools run without an approval
+	// prompt; this keeps autonomy outside bypass mode. Tools not listed pop an
+	// approval menu that the driver auto-approves. Ignored under
+	// bypassPermissions (which skips all checks). Needed because bypass mode
+	// auto-declines AskUserQuestion — "default" + an allowlist renders it.
+	AllowedTools []string `yaml:"allowed_tools,omitempty"`
 	// StallTimeoutS is how long the driver waits for the next transcript
 	// progress before declaring an upstream stall and cancelling the
 	// in-flight request. 0 = use the built-in default (90s).
