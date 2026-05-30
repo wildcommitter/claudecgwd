@@ -31,8 +31,10 @@ def service():
     from googleapiclient.discovery import build
 
     if not os.path.exists(TOKEN):
-        print("google calendar not authorized yet — run scripts/gcal-auth once "
-              "to grant access (opens a browser).", file=sys.stderr)
+        print("google calendar not authorized yet — run the chat-driven auth: "
+              "`scripts/gcal-auth url`, send the user the URL, then "
+              "`scripts/gcal-auth exchange <code>` with what they paste back.",
+              file=sys.stderr)
         sys.exit(1)
     creds = Credentials.from_authorized_user_file(TOKEN, SCOPES)
     if not creds.valid:
@@ -40,8 +42,9 @@ def service():
             creds.refresh(Request())
             _save_token(creds)
         else:
-            print("google calendar authorization is invalid/expired — re-run "
-                  "scripts/gcal-auth.", file=sys.stderr)
+            print("google calendar authorization is invalid/expired — re-run the "
+                  "chat-driven auth: `scripts/gcal-auth url` then "
+                  "`scripts/gcal-auth exchange <code>`.", file=sys.stderr)
             sys.exit(1)
     return build("calendar", "v3", credentials=creds, cache_discovery=False)
 

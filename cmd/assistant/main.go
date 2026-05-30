@@ -57,6 +57,10 @@ func run(configPath string, logger *slog.Logger) error {
 	// workdir so it keeps working after a /project switch moves the session.
 	ragCmd := filepath.Join(cfg.Claude.Workdir, "scripts", "rag")
 
+	// /calauth drives the headless Google Calendar OAuth handshake via
+	// scripts/gcal-auth. Resolved from the same stable workdir for the same reason.
+	gcalCmd := filepath.Join(cfg.Claude.Workdir, "scripts", "gcal-auth")
+
 	// Shared audio-language policy (the /speech knob): drives both the incoming
 	// (whisper) and outgoing (piper voice) engines.
 	langPolicy := bridge.NewLanguagePolicy(cfg.Speech.Language)
@@ -81,6 +85,7 @@ func run(configPath string, logger *slog.Logger) error {
 		voice,
 		memory,
 		ragCmd,
+		gcalCmd,
 		inbound,
 		logger.With("component", "router"),
 		time.Duration(cfg.Router.WatchdogTimeoutS)*time.Second,

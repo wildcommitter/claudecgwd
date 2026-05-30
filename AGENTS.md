@@ -65,8 +65,8 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   AskChoices) and run as a `bridge.Bridge`. To add a surface, implement those
   and wire it in `cmd/assistant`.
 - **Control commands** (`/new`, `/project <name|dir>`, `/projects`, `/search`,
-  `/voice`, `/speech`, `/status`, `/health`, `/help`) are intercepted by the
-  router (`parseControl`) and never reach
+  `/calauth`, `/voice`, `/speech`, `/status`, `/health`, `/help`) are intercepted
+  by the router (`parseControl`) and never reach
   Claude; unknown slash text passes through. They drive the `SessionController`
   (the `claude.Driver`): `/new` restarts with a fresh session id, `/project`
   restarts in a new workdir. The driver distinguishes an intentional restart
@@ -104,11 +104,17 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
   is spoken by a Spanish voice; a pinned `/speech <lang>` forces one instead.
 - **Google Calendar** (`scripts/gcal`, `scripts/gcal-auth`, the `calendar`
   skill): read agenda / create / find events (no Go code — the agent shells to
-  the script, like rag/tts). Auth is OAuth as the user: `gcal-auth` runs a
-  one-time browser consent and stores a refresh token (`$GCAL_TOKEN`) from the
-  Desktop OAuth client JSON (`$GCAL_OAUTH_CLIENT`); `gcal` refreshes silently.
-  `$GCAL_CALENDAR` defaults to `primary`. Falls back to a clear "run gcal-auth"
-  error when unauthorized.
+  the script, like rag/tts). Auth is OAuth as the user, but the box is
+  **headless**, so consent is a two-step copy-paste flow rather than a local
+  browser: `gcal-auth url` prints a consent URL, `gcal-auth exchange <code|url>`
+  redeems the pasted code (PKCE verifier stashed between the two processes). The
+  router exposes this as the `/calauth` command (`handleCalAuth`), so the user
+  connects their calendar entirely from **Telegram or WhatsApp** — `/calauth`
+  for the link, `/calauth <pasted-url>` to finish. `gcal-auth browser` keeps the
+  old local-browser flow for a desktop. Token at `$GCAL_TOKEN`, client JSON at
+  `$GCAL_OAUTH_CLIENT`, `$GCAL_CALENDAR` defaults to `primary`; `gcal` refreshes
+  silently and falls back to a clear "run the chat-driven auth" message when
+  unauthorized.
 - **Persistent memory** (`memory.go`, `scripts/remember`, the `memory` skill):
   durable user facts in a markdown store, prepended to the first prompt of each
   session via `Router.withMemory` (keyed off `SessionController.Generation()` so

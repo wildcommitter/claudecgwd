@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# One-time Google Calendar OAuth consent — run this interactively (it opens a
-# browser). Saves a refresh token the bridge then uses silently.
+# Google Calendar OAuth bootstrap — chat-driven and headless. Saves a refresh
+# token the bridge then uses silently.
 #
-#   scripts/gcal-auth
+#   scripts/gcal-auth url                  # print a consent URL to send the user
+#   scripts/gcal-auth exchange <code|url>  # exchange the pasted code/redirect URL
+#   scripts/gcal-auth browser              # legacy local-browser flow (needs a display)
 #
 # Env: GCAL_VENV, GCAL_OAUTH_CLIENT (default ~/.config/assistant/gcal-oauth.json),
 # GCAL_TOKEN (default ~/.config/assistant/gcal-token.json).

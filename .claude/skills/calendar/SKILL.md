@@ -10,7 +10,7 @@ description: >-
 
 # Google Calendar
 
-The bridge talks to Google Calendar via `scripts/gcal` (service-account auth).
+The bridge talks to Google Calendar via `scripts/gcal` (OAuth as the user).
 Use it whenever the user asks about or wants to change their calendar.
 
 ```sh
@@ -39,11 +39,25 @@ gcal find --query <text> [--days N]    # search upcoming events
 
 ## Notes
 
-- Auth is OAuth as the user: a one-time `scripts/gcal-auth` (browser consent)
-  stores a refresh token; `gcal` refreshes silently after. `$GCAL_CALENDAR`
-  defaults to `primary` (the user's own calendar) — no sharing needed.
-- If `gcal` says "not authorized yet — run scripts/gcal-auth", the calendar
-  isn't set up; tell the user to run that once (it's interactive, opens a
-  browser) — don't guess event data.
+- Auth is OAuth as the user, stored as a refresh token; `gcal` refreshes
+  silently after. `$GCAL_CALENDAR` defaults to `primary` (the user's own
+  calendar) — no sharing needed.
+- **Authorizing over chat (headless — no browser on the server):** there's a
+  native bridge command the user can run on either Telegram or WhatsApp:
+  `/calauth` prints a consent link, and `/calauth <pasted-url-or-code>` finishes
+  it. Point them at `/calauth` first. If they'd rather you drive it, do the same
+  steps yourself — don't ask them to use a terminal:
+  1. If `~/.config/assistant/gcal-oauth.json` is missing, ask the user to create
+     an OAuth client (Desktop app) in Google Cloud Console and send the JSON;
+     save it to that path.
+  2. Run `scripts/gcal-auth url` and **send the user the printed URL.** Tell
+     them to open it, grant access, and paste back what they land on — the
+     `http://localhost/...` address-bar URL (or just the `code` value). The page
+     will look broken; that's expected, only the URL matters.
+  3. When they paste it back, run `scripts/gcal-auth exchange "<code-or-url>"`.
+  Both the `/calauth` command and these scripts work the same on Telegram and
+  WhatsApp. Don't guess event data while unauthorized.
+- `scripts/gcal-auth browser` is the old local-browser flow — only for a
+  desktop with a display, not the bridge.
 - A morning-agenda routine pairs well with this: `scripts/routine add "daily 08:00"
   "Post my calendar agenda for today"`.

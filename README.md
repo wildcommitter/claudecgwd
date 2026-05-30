@@ -65,6 +65,7 @@ the TUI parse is only a fallback.
 | `/project <name\|dir>` | Switch project; a bare name is wildcard-matched against tracked projects |
 | `/projects` | List tracked project directories |
 | `/search <query>` | Semantic search over attachments + past conversations |
+| `/calauth` | Connect Google Calendar — sends a consent link to paste back |
 | `/voice <on\|off\|auto>` | Spoken replies: always / never / mirror voice notes |
 | `/speech <language\|country>` | Set the audio language (transcription + voice); voices download on demand |
 | `/memory` | List the durable facts I remember about you |

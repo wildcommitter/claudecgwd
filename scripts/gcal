@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Google Calendar — the single entrypoint the calendar skill calls. Wraps the
-# gcal venv (service-account auth) so callers don't deal with Python.
+# gcal venv (OAuth as the user) so callers don't deal with Python.
 #
 #   gcal agenda [--days N]
 #   gcal add --start <ISO> [--end <ISO>] --title <T> [--location L] [--description D]
 #   gcal find --query <Q> [--days N]
 #
+# Auth: run scripts/gcal-auth (chat-driven; see that script).
 # Env: GCAL_VENV (default ~/.local/share/assistant/gcal-venv),
-# GCAL_CREDENTIALS (default ~/.config/assistant/gcal-sa.json),
+# GCAL_TOKEN (default ~/.config/assistant/gcal-token.json),
 # GCAL_CALENDAR (default primary; for a personal calendar use your Gmail).
 
 set -euo pipefail

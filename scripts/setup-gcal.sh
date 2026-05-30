@@ -19,3 +19,10 @@ echo "==> installing google calendar client"
 "$VENV/bin/pip" install -q google-api-python-client google-auth google-auth-oauthlib
 
 echo "done: gcal venv ready at $VENV"
+echo
+echo "Next: save the OAuth client JSON (Desktop app) to"
+echo "  ${GCAL_OAUTH_CLIENT:-$HOME/.config/assistant/gcal-oauth.json}"
+echo "then authorize (chat-driven, no browser on this box):"
+echo "  scripts/gcal-auth url             # prints a consent URL to send the user"
+echo "  scripts/gcal-auth exchange <code> # exchange the pasted code/redirect URL"
+echo "On a machine with a display you can instead run: scripts/gcal-auth browser"

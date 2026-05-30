@@ -40,6 +40,7 @@ type Router struct {
 	voice      *VoiceOut    // for the /voice command ("" disables it)
 	memory     *MemoryStore // persistent user facts, injected per session (nil disables)
 	ragCmd     string       // path to scripts/rag for the /search command ("" disables it)
+	gcalCmd    string       // path to scripts/gcal-auth for /calauth ("" disables it)
 	inbound    <-chan Inbound
 	log        *slog.Logger
 	turnBudget time.Duration
@@ -48,11 +49,11 @@ type Router struct {
 	lastMemGen int // session generation memory was last injected for
 }
 
-func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, voice *VoiceOut, memory *MemoryStore, ragCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
+func NewRouter(driver Sender, ctl SessionController, projects *ProjectRegistry, voice *VoiceOut, memory *MemoryStore, ragCmd, gcalCmd string, inbound <-chan Inbound, log *slog.Logger, turnBudget time.Duration) *Router {
 	if turnBudget <= 0 {
 		turnBudget = 5 * time.Minute
 	}
-	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, memory: memory, ragCmd: ragCmd, inbound: inbound, log: log, turnBudget: turnBudget, started: time.Now(), lastMemGen: -1}
+	return &Router{driver: driver, ctl: ctl, projects: projects, voice: voice, memory: memory, ragCmd: ragCmd, gcalCmd: gcalCmd, inbound: inbound, log: log, turnBudget: turnBudget, started: time.Now(), lastMemGen: -1}
 }
 
 func (r *Router) Run(ctx context.Context) error {
@@ -181,6 +182,7 @@ const controlHelp = "Session commands:\n" +
 	"/project <name|dir> — switch project (name is wildcard-matched against tracked projects)\n" +
 	"/projects — list tracked project directories\n" +
 	"/search <query> — semantic search over attachments + past conversations\n" +
+	"/calauth — connect Google Calendar (sends a consent link to paste back)\n" +
 	"/voice <on|off|auto> — spoken replies: always / never / mirror voice notes\n" +
 	"/speech <language|country> — set the audio language (transcription + voice)\n" +
 	"/memory — list what I remember about you\n" +
@@ -204,7 +206,7 @@ func parseControl(text string) (name, arg string, ok bool) {
 		arg = strings.TrimSpace(fields[1])
 	}
 	switch name {
-	case "new", "project", "projects", "search", "voice", "speech", "memory", "forget", "status", "health", "help":
+	case "new", "project", "projects", "search", "calauth", "voice", "speech", "memory", "forget", "status", "health", "help":
 		return name, arg, true
 	}
 	return "", "", false
@@ -238,6 +240,71 @@ func (r *Router) handleSearch(ctx context.Context, reply func(string), query str
 		return
 	}
 	reply("🔎 Results for \"" + query + "\":\n\n" + text)
+}
+
+// handleCalAuth drives the chat-based Google Calendar OAuth handshake by
+// shelling out to scripts/gcal-auth. It's a two-step copy-paste flow so it works
+// on a headless server where the user is on a messenger:
+//
+//	/calauth                  → print a consent URL to open and authorize
+//	/calauth <code-or-url>    → exchange the pasted code / redirect URL for a token
+//
+// `/calauth url` and `/calauth exchange <x>` map to the same two steps for users
+// who type the subcommand explicitly. Both messengers reach this identically.
+func (r *Router) handleCalAuth(ctx context.Context, reply func(string), arg string) {
+	if r.gcalCmd == "" {
+		reply("Calendar auth isn't configured.")
+		return
+	}
+
+	// Resolve the subcommand. Default (no arg) starts the flow with `url`; a bare
+	// argument that isn't the literal "url" is taken as the pasted code/redirect
+	// URL to exchange.
+	var scriptArgs []string
+	exchanging := false
+	switch {
+	case arg == "" || strings.EqualFold(arg, "url"):
+		scriptArgs = []string{"url"}
+	case strings.HasPrefix(strings.ToLower(arg), "exchange"):
+		code := strings.TrimSpace(arg[len("exchange"):])
+		if code == "" {
+			reply("Paste the code: /calauth exchange <code-or-redirect-url>")
+			return
+		}
+		scriptArgs = []string{"exchange", code}
+		exchanging = true
+	default:
+		scriptArgs = []string{"exchange", arg}
+		exchanging = true
+	}
+
+	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, r.gcalCmd, scriptArgs...).CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		r.log.Warn("calauth failed", "err", err, "step", scriptArgs[0])
+		msg := "⚠️  calendar auth failed"
+		if text != "" {
+			msg += ":\n" + text
+		}
+		reply(msg)
+		return
+	}
+
+	if exchanging {
+		reply("✅ Google Calendar connected. " + text)
+		return
+	}
+	// `url` step: either already authorized, or a consent URL to relay with
+	// copy-paste instructions for the redirect.
+	if strings.HasPrefix(text, "http") {
+		reply("🔗 Open this link, grant access, then paste back the URL you land on " +
+			"(it'll look like a broken http://localhost page — that's fine, the address bar is what matters):\n\n" +
+			text + "\n\nThen send:  /calauth <paste-the-url-or-code-here>")
+		return
+	}
+	reply("📅 " + text)
 }
 
 // healthReport assembles a one-shot snapshot of the bridge's state.
@@ -304,6 +371,8 @@ func (r *Router) handleControl(ctx context.Context, msg Inbound, name, arg strin
 			return
 		}
 		r.handleSearch(ctx, reply, arg)
+	case "calauth":
+		r.handleCalAuth(ctx, reply, arg)
 	case "voice":
 		if !r.voice.Enabled() {
 			reply("Voice replies aren't enabled.")

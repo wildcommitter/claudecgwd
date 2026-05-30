@@ -97,7 +97,7 @@ func (o *captureOrigin) AskChoices(context.Context, []claude.Question) ([]claude
 func TestRouterControlCommands(t *testing.T) {
 	sender := &stubSender{}
 	ctl := &stubController{}
-	r := NewRouter(sender, ctl, nil, nil, nil, "", nil, discardLogger(), 0)
+	r := NewRouter(sender, ctl, nil, nil, nil, "", "", nil, discardLogger(), 0)
 	ctx := context.Background()
 
 	t.Run("/new restarts the session and does not reach Claude", func(t *testing.T) {
@@ -159,7 +159,7 @@ func TestRouterProjectWildcard(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctl := &stubController{}
-	r := NewRouter(&stubSender{}, ctl, reg, nil, nil, "", nil, discardLogger(), 0)
+	r := NewRouter(&stubSender{}, ctl, reg, nil, nil, "", "", nil, discardLogger(), 0)
 	ctx := context.Background()
 
 	t.Run("bare name resolves via registry to the tracked path", func(t *testing.T) {

@@ -6,6 +6,10 @@
 *.out
 /coverage.txt
 
+# Python bytecode from the helper venv scripts (gcal, rag, transcribe, …)
+__pycache__/
+*.pyc
+
 # Local config & secrets — these should never be committed
 /config.yaml
 /secrets.env
