@@ -3,7 +3,18 @@ claude:
   workdir: /home/user/claudecgwd
   # Generate once with: uuidgen
   session_id: REPLACE-WITH-UUID
-  permission_mode: bypassPermissions
+  # Permission mode:
+  #   bypassPermissions — runs everything, no prompts, BUT auto-declines the
+  #     model's AskUserQuestion tool, so interactive menus never render.
+  #   default — interactive menus work. Tools in allowed_tools below run without
+  #     a prompt; anything else pops an approval menu that the bridge
+  #     auto-approves (no human is at the TUI to click), so autonomy is the same
+  #     in practice. Recommended if you want AskUserQuestion menus.
+  permission_mode: default
+  # Tools that run without an approval prompt under non-bypass modes. Keep broad
+  # to avoid per-call approval latency (unlisted tools still work — they're
+  # auto-approved). Ignored under bypassPermissions.
+  allowed_tools: [Bash, Edit, Write, Read, Glob, Grep, WebFetch, WebSearch, TodoWrite, Task, NotebookEdit, Skill]
   pty_cols: 200
   pty_rows: 500
   # Optional extra args passed to `claude`, e.g. ["--model", "opus"]

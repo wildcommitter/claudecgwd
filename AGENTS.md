@@ -49,9 +49,14 @@ docs/DOCKER.md  sandboxed Podman/Docker deployment
 ## Architecture & invariants
 
 - **One claude session**, pinned via `--session-id` and resumed with
-  `--resume`, run with `--permission-mode bypassPermissions`. All inbound
-  messages (every surface) feed one FIFO `inbound` channel; the router
-  processes them one at a time.
+  `--resume`, run with `--permission-mode default` + an `allowed_tools`
+  allowlist (NOT `bypassPermissions` — bypass auto-declines the model's
+  `AskUserQuestion`, breaking interactive menus). Allowlisted tools run without
+  a prompt; anything else pops an approval menu the driver **auto-approves**
+  (`approvalMenuVisible`/`approveToolPrompt` in `interactive.go`, recognized by
+  its `Yes/No … Tab to amend` shape), so autonomy matches bypass while menus
+  still work. All inbound messages (every surface) feed one FIFO `inbound`
+  channel; the router processes them one at a time.
 - **Reply extraction reads the transcript, not the screen.** `driver.Send`
   waits for a terminal `stop_reason` in the session JSONL and returns the
   assistant text from there. Screen-scraping (`extractResponse`) is a fallback

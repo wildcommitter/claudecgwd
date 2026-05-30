@@ -196,6 +196,9 @@ ASSISTANT_SKIP_INSTALL=1 git commit ...
 - **At-least-once sends.** The retry policy can rarely deliver a duplicate if a
   request reached the server but its response was lost — an accepted trade for
   not dropping messages during a network blip.
-- **No tool-use approval UI.** Runs with `bypassPermissions` — Claude can
-  read/edit files and run shell as you. The Docker sandbox bounds the blast
-  radius; trust the binary.
+- **No tool-use approval UI.** Runs in `default` permission mode with a broad
+  `allowed_tools` allowlist, and the bridge **auto-approves** any tool-permission
+  prompt that still appears — so Claude reads/edits files and runs shell as you,
+  with no human gate. (`default` rather than `bypassPermissions` specifically
+  because bypass auto-declines the `AskUserQuestion` tool, which would break
+  interactive menus.) The Docker sandbox bounds the blast radius; trust the binary.
