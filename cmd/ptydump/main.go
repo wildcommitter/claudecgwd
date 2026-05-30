@@ -27,18 +27,27 @@ func main() {
 	out := flag.String("out", "/tmp/claude-pty.log", "raw output path")
 	sendAfter := flag.Duration("send-after", 0, "if >0, send the -prompt after this delay")
 	prompt := flag.String("prompt", "", "prompt to send")
+	perm := flag.String("perm", "bypass", "permission handling: 'bypass' (--dangerously-skip-permissions) or a --permission-mode value (default|dontAsk|plan|acceptEdits)")
+	allowed := flag.String("allowed", "", "space-separated tool names for --allowedTools")
 	flag.Parse()
 	if *session == "" {
 		fmt.Fprintln(os.Stderr, "missing -session")
 		os.Exit(2)
 	}
 
-	args := []string{"--session-id", *session, "--dangerously-skip-permissions"}
+	permArgs := []string{"--dangerously-skip-permissions"}
+	if *perm != "bypass" && *perm != "" {
+		permArgs = []string{"--permission-mode", *perm}
+	}
+	if *allowed != "" {
+		permArgs = append(permArgs, append([]string{"--allowedTools"}, strings.Fields(*allowed)...)...)
+	}
 	absWorkdir, _ := filepath.Abs(*workdir)
 	slug := strings.ReplaceAll(absWorkdir, "/", "-")
 	sessFile := filepath.Join(os.Getenv("HOME"), ".claude", "projects", slug, *session+".jsonl")
+	args := append([]string{"--session-id", *session}, permArgs...)
 	if _, err := os.Stat(sessFile); err == nil {
-		args = []string{"--resume", *session, "--dangerously-skip-permissions"}
+		args = append([]string{"--resume", *session}, permArgs...)
 	}
 	cmd := exec.Command(*binary, args...)
 	cmd.Dir = *workdir
@@ -87,8 +96,11 @@ func main() {
 	if *sendAfter > 0 && *prompt != "" {
 		go func() {
 			time.Sleep(*sendAfter)
-			payload := "\x1b[200~" + *prompt + "\x1b[201~\r"
-			_, _ = f.WriteString(payload)
+			_, _ = f.WriteString("\x1b[200~" + *prompt + "\x1b[201~")
+			time.Sleep(500 * time.Millisecond) // let the paste settle before submitting
+			_, _ = f.WriteString("\r")
+			time.Sleep(500 * time.Millisecond)
+			_, _ = f.WriteString("\r") // a second Enter in case the first lands mid-render
 		}()
 	}
 
